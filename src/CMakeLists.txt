@@ -1,11 +1,12 @@
-# Cross-cutting infrastructure shared by every domain.
-add_subdirectory(core)
-
 # Business domains. Each subdirectory registers its own targets as it gains
 # an implementation along the roadmap.
 add_subdirectory(domains/session)
 add_subdirectory(domains/speech)
 add_subdirectory(domains/config)
+
+# Cross-cutting infrastructure shared by every domain. Depends on the
+# domains above for event payload types.
+add_subdirectory(core)
 
 # Composition root: wires the domains together into the service executable.
 add_subdirectory(app)
