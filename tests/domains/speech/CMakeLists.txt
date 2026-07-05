@@ -1,9 +1,10 @@
-add_executable(yoru-domain-speech-tests test_types.cpp)
+add_executable(yoru-domain-speech-tests test_types.cpp test_events.cpp)
 
 target_link_libraries(
     yoru-domain-speech-tests
     PRIVATE
         yoru-domain-speech
+        yoru-core
         yoru-test-main
         yoru-warnings
 )

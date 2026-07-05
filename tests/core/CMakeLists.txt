@@ -1,4 +1,4 @@
-add_executable(yoru-core-tests test_event_bus.cpp test_events.cpp)
+add_executable(yoru-core-tests test_event_bus.cpp)
 
 target_link_libraries(
     yoru-core-tests

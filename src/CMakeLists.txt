@@ -4,8 +4,8 @@ add_subdirectory(domains/session)
 add_subdirectory(domains/speech)
 add_subdirectory(domains/config)
 
-# Cross-cutting infrastructure shared by every domain. Depends on the
-# domains above for event payload types.
+# Cross-cutting infrastructure shared by every domain. Depends on nothing;
+# every domain may depend on it, never the other way around.
 add_subdirectory(core)
 
 # Composition root: wires the domains together into the service executable.
