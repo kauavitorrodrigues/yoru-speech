@@ -11,7 +11,7 @@ namespace yoru::core {
 
 // Decoupled communication between components: publishers don't know who is
 // listening, subscribers don't know who published. Contains no business
-// logic — it only distributes.
+// logic, it only distributes.
 //
 // v1 is synchronous: publish() invokes every matching subscriber on the
 // caller's thread, in subscription order, before returning. This keeps the
@@ -21,9 +21,9 @@ namespace yoru::core {
 // Not thread-safe by design: nothing in the current architecture publishes
 // or subscribes from multiple threads. Concurrent publish()/subscribe() calls
 // are a data race (undefined behavior), not merely a correctness bug. Revisit
-// if a concurrent publisher/subscriber is introduced — the Speech Engine's
-// on-demand/background model loading (docs/runtime-architecture.md) or
-// multiple IPC client threads are the most likely first offenders.
+// if a concurrent publisher/subscriber is introduced. The Speech Engine's
+// on-demand/background model loading or multiple IPC client threads are
+// the most likely first offenders.
 class EventBus {
 public:
     EventBus() = default;

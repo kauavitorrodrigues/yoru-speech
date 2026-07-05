@@ -15,7 +15,7 @@ enum class ModelLoadPolicy {
 };
 
 // Represents the user's persisted preferences. Configuration expresses
-// intent — it never carries execution state.
+// intent, it never carries execution state.
 struct Configuration {
     std::string default_language = "auto";
     std::string selected_model = "base";
