@@ -40,3 +40,10 @@ target_compile_options(
 )
 
 add_subdirectory(src)
+
+# --- Tests ---
+option(YORU_BUILD_TESTS "Build unit tests" ON)
+if(YORU_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
