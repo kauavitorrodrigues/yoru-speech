@@ -1,0 +1,27 @@
+# Local Claude Code configuration (agents, sessions, working docs)
+.claude/
+
+# Build
+/build/
+*.o
+*.a
+*.so
+*.out
+
+# Service executable
+/yoru-speech
+
+# Recognition models (whisper.cpp)
+*.bin
+
+# IDE / editor files
+.vscode/
+.idea/
+*.swp
+*~
+.cache/
+compile_commands.json
+
+# Temporary files
+*.tmp
+*.log
