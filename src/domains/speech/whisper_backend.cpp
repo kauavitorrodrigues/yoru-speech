@@ -74,9 +74,15 @@ TranscriptionResult WhisperBackend::transcribe(core::SessionId session_id,
     params.print_timestamps = false;
     params.print_special = false;
 
+    // "auto" as the language string means "detect, then transcribe":
+    // whisper.cpp still runs full decoding after detecting. params.
+    // detect_language is a different, narrower knob ("stop right after
+    // detecting, don't transcribe" — mirroring whisper-cli's separate
+    // --detect-language flag) and must stay false here, or transcribe()
+    // silently returns zero segments no matter how clear the audio is.
     const bool auto_detect = request.language.empty() || request.language == "auto";
-    params.language = auto_detect ? nullptr : request.language.c_str();
-    params.detect_language = auto_detect;
+    params.language = auto_detect ? "auto" : request.language.c_str();
+    params.detect_language = false;
 
     const auto started_at = std::chrono::steady_clock::now();
     const int status =
