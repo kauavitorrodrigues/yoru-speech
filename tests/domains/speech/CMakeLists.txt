@@ -3,6 +3,7 @@ add_executable(
     test_types.cpp
     test_events.cpp
     test_whisper_backend.cpp
+    test_model_repository.cpp
 )
 
 target_link_libraries(
