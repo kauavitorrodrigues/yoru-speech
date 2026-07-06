@@ -1,4 +1,9 @@
-add_executable(yoru-domain-ipc-tests test_ipc_server.cpp)
+add_executable(
+    yoru-domain-ipc-tests
+    test_ipc_server.cpp
+    test_message_codec.cpp
+    test_command_dispatcher.cpp
+)
 
 target_link_libraries(
     yoru-domain-ipc-tests
