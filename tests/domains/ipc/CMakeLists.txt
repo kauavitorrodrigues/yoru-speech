@@ -11,8 +11,13 @@ target_link_libraries(
     yoru-domain-ipc-tests
     PRIVATE
         yoru-domain-ipc
+        yoru-domain-clipboard
         yoru-test-main
         yoru-warnings
 )
 
-doctest_discover_tests(yoru-domain-ipc-tests)
+# Two of this binary's tests drive a real AutoClipboard (real wl-copy/
+# wl-paste) via the full IPC pipeline; the same RESOURCE_LOCK as
+# tests/domains/clipboard/CMakeLists.txt keeps them from racing those
+# tests, or each other, for the global system clipboard under `ctest -j`.
+doctest_discover_tests(yoru-domain-ipc-tests PROPERTIES RESOURCE_LOCK wayland_clipboard)
