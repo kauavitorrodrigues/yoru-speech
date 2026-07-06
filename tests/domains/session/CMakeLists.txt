@@ -2,6 +2,7 @@ add_executable(
     yoru-domain-session-tests
     test_service_state.cpp
     test_session.cpp
+    test_session_manager.cpp
 )
 
 target_link_libraries(
