@@ -3,6 +3,7 @@
 add_subdirectory(domains/session)
 add_subdirectory(domains/speech)
 add_subdirectory(domains/config)
+add_subdirectory(domains/audio)
 
 # Cross-cutting infrastructure shared by every domain. Depends on nothing;
 # every domain may depend on it, never the other way around.
