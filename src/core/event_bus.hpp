@@ -36,6 +36,18 @@ public:
     template <typename Event> using Handler = std::function<void(const Event&)>;
 
     // Registers `handler` to be invoked whenever an `Event` is published.
+    //
+    // There is no unsubscribe: a handler stays registered for the
+    // EventBus's entire lifetime. A handler capturing a pointer/reference
+    // to an object (e.g. `this`) must therefore never outlive that
+    // object: nothing stops publish() from invoking it after the captured
+    // object is destroyed, which is undefined behavior, not a caught
+    // error. In practice this means the EventBus must outlive every
+    // subscribing object, AND no event may be published once a
+    // subscribing object's destructor has run. The composition root is
+    // responsible for an ordering that guarantees this (e.g. constructing
+    // the EventBus first and destroying every subscriber before it, and
+    // not publishing from any destructor that runs afterward).
     template <typename Event> void subscribe(Handler<Event> handler) {
         auto erased = [handler = std::move(handler)](const std::any& event) {
             handler(std::any_cast<const Event&>(event));

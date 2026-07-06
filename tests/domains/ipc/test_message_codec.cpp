@@ -6,20 +6,31 @@
 #include <string>
 #include <vector>
 
+using yoru::audio::Recording;
+using yoru::audio::RecordingFinished;
+using yoru::audio::RecordingStarted;
 using yoru::config::Configuration;
+using yoru::config::ConfigurationChanged;
 using yoru::config::ModelLoadPolicy;
+using yoru::core::ErrorOccurred;
+using yoru::core::SessionId;
 using yoru::ipc::decode_set_config;
 using yoru::ipc::encode_ack;
 using yoru::ipc::encode_config;
 using yoru::ipc::encode_error;
+using yoru::ipc::encode_event;
 using yoru::ipc::encode_models;
 using yoru::ipc::encode_state;
 using yoru::ipc::encode_transcript;
 using yoru::ipc::parse_message;
 using yoru::session::ServiceState;
+using yoru::session::SessionCancelled;
 using yoru::speech::Model;
+using yoru::speech::ModelLoaded;
 using yoru::speech::ModelSize;
 using yoru::speech::Transcript;
+using yoru::speech::TranscriptionCompleted;
+using yoru::speech::TranscriptionStarted;
 
 TEST_CASE("parse_message() extracts the type field from a well-formed message") {
     const auto message = parse_message(R"({"type":"start_recording"})");
@@ -198,4 +209,109 @@ TEST_CASE("encode_models() with an empty list still produces a valid response") 
     const auto reparsed = parse_message(encoded);
     REQUIRE(reparsed.type.has_value());
     CHECK(encoded.find(R"("models":[])") != std::string::npos);
+}
+
+TEST_CASE("encode_event() envelopes every event with type \"event\" and its own event name") {
+    const auto encoded = encode_event(RecordingStarted{.session_id = SessionId{7}});
+
+    const auto reparsed = parse_message(encoded);
+    REQUIRE(reparsed.type.has_value());
+    CHECK(reparsed.type.value() == "event");
+    CHECK(encoded.find(R"("event":"recording_started")") != std::string::npos);
+    CHECK(encoded.find(R"("session_id":7)") != std::string::npos);
+}
+
+TEST_CASE("encode_event() for RecordingFinished carries duration and format, not raw samples") {
+    const Recording recording{
+        .samples = {0.1F, 0.2F, 0.3F, 0.4F},
+        .sample_rate = 4,
+        .channels = 1,
+    };
+
+    const auto encoded =
+        encode_event(RecordingFinished{.session_id = SessionId{3}, .recording = recording});
+
+    CHECK(encoded.find(R"("event":"recording_finished")") != std::string::npos);
+    CHECK(encoded.find(R"("duration_ms":1000)") != std::string::npos);
+    CHECK(encoded.find(R"("sample_rate":4)") != std::string::npos);
+    CHECK(encoded.find("samples") == std::string::npos);
+}
+
+TEST_CASE("encode_event() for TranscriptionStarted carries the session id") {
+    const auto encoded = encode_event(TranscriptionStarted{.session_id = SessionId{9}});
+
+    CHECK(encoded.find(R"("event":"transcription_started")") != std::string::npos);
+    CHECK(encoded.find(R"("session_id":9)") != std::string::npos);
+}
+
+TEST_CASE("encode_event() for TranscriptionCompleted carries the Transcript") {
+    const Transcript transcript{
+        .text = "olá mundo",
+        .detected_language = "pt",
+        .requested_language = "auto",
+        .audio_duration = std::chrono::milliseconds{2000},
+        .processing_time = std::chrono::milliseconds{90},
+    };
+
+    const auto encoded =
+        encode_event(TranscriptionCompleted{.session_id = SessionId{1}, .transcript = transcript});
+
+    CHECK(encoded.find(R"("event":"transcription_completed")") != std::string::npos);
+    CHECK(encoded.find("mundo") != std::string::npos);
+    CHECK(encoded.find(R"("audio_duration_ms":2000)") != std::string::npos);
+}
+
+TEST_CASE("encode_event() for ModelLoaded carries the Model") {
+    const auto encoded = encode_event(ModelLoaded{
+        .model =
+            Model{
+                .name = "ggml-base",
+                .size = ModelSize::Base,
+                .supported_language = "multi",
+                .path = "/models/ggml-base.bin",
+                .backend = "whisper.cpp",
+            },
+    });
+
+    CHECK(encoded.find(R"("event":"model_loaded")") != std::string::npos);
+    CHECK(encoded.find(R"("name":"ggml-base")") != std::string::npos);
+}
+
+TEST_CASE("encode_event() for ConfigurationChanged carries the new Configuration") {
+    Configuration configuration;
+    configuration.default_language = "pt";
+
+    const auto encoded = encode_event(ConfigurationChanged{.configuration = configuration});
+
+    CHECK(encoded.find(R"("event":"configuration_changed")") != std::string::npos);
+    CHECK(encoded.find(R"("default_language":"pt")") != std::string::npos);
+}
+
+TEST_CASE("encode_event() for ErrorOccurred omits session_id when absent") {
+    const auto encoded = encode_event(ErrorOccurred{
+        .session_id = std::nullopt,
+        .component = "config",
+        .message = "failed to load config.toml",
+    });
+
+    CHECK(encoded.find(R"("event":"error_occurred")") != std::string::npos);
+    CHECK(encoded.find("session_id") == std::string::npos);
+    CHECK(encoded.find("failed to load config.toml") != std::string::npos);
+}
+
+TEST_CASE("encode_event() for ErrorOccurred includes session_id when present") {
+    const auto encoded = encode_event(ErrorOccurred{
+        .session_id = SessionId{4},
+        .component = "speech",
+        .message = "no model loaded",
+    });
+
+    CHECK(encoded.find(R"("session_id":4)") != std::string::npos);
+}
+
+TEST_CASE("encode_event() for SessionCancelled carries the session id") {
+    const auto encoded = encode_event(SessionCancelled{.session_id = SessionId{2}});
+
+    CHECK(encoded.find(R"("event":"session_cancelled")") != std::string::npos);
+    CHECK(encoded.find(R"("session_id":2)") != std::string::npos);
 }

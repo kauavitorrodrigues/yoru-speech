@@ -2,6 +2,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cstdint>
+
 namespace yoru::ipc {
 
 namespace {
@@ -56,6 +58,14 @@ std::string to_string(session::ServiceState state) {
         return "error";
     }
     return "idle";
+}
+
+std::uint64_t raw(core::SessionId session_id) {
+    return static_cast<std::uint64_t>(session_id);
+}
+
+json event_envelope(const char* event_name) {
+    return json{{"type", "event"}, {"event", event_name}};
 }
 
 } // namespace
@@ -173,6 +183,73 @@ std::string encode_models(const std::string& type, const std::vector<speech::Mod
         });
     }
     return json{{"type", type}, {"ok", true}, {"models", models_json}}.dump();
+}
+
+std::string encode_event(const audio::RecordingStarted& event) {
+    auto envelope = event_envelope("recording_started");
+    envelope["session_id"] = raw(event.session_id);
+    return envelope.dump();
+}
+
+std::string encode_event(const audio::RecordingFinished& event) {
+    auto envelope = event_envelope("recording_finished");
+    envelope["session_id"] = raw(event.session_id);
+    envelope["duration_ms"] = event.recording.duration().count();
+    envelope["sample_rate"] = event.recording.sample_rate;
+    envelope["channels"] = event.recording.channels;
+    return envelope.dump();
+}
+
+std::string encode_event(const speech::TranscriptionStarted& event) {
+    auto envelope = event_envelope("transcription_started");
+    envelope["session_id"] = raw(event.session_id);
+    return envelope.dump();
+}
+
+std::string encode_event(const speech::TranscriptionCompleted& event) {
+    auto envelope = event_envelope("transcription_completed");
+    envelope["session_id"] = raw(event.session_id);
+    envelope["text"] = event.transcript.text;
+    envelope["detected_language"] = event.transcript.detected_language;
+    envelope["requested_language"] = event.transcript.requested_language;
+    envelope["audio_duration_ms"] = event.transcript.audio_duration.count();
+    envelope["processing_time_ms"] = event.transcript.processing_time.count();
+    return envelope.dump();
+}
+
+std::string encode_event(const speech::ModelLoaded& event) {
+    auto envelope = event_envelope("model_loaded");
+    envelope["name"] = event.model.name;
+    envelope["size"] = to_string(event.model.size);
+    envelope["supported_language"] = event.model.supported_language;
+    envelope["path"] = event.model.path.string();
+    envelope["backend"] = event.model.backend;
+    return envelope.dump();
+}
+
+std::string encode_event(const config::ConfigurationChanged& event) {
+    auto envelope = event_envelope("configuration_changed");
+    envelope["default_language"] = event.configuration.default_language;
+    envelope["selected_model"] = event.configuration.selected_model;
+    envelope["auto_clipboard"] = event.configuration.auto_clipboard;
+    envelope["model_load_policy"] = to_string(event.configuration.model_load_policy);
+    return envelope.dump();
+}
+
+std::string encode_event(const core::ErrorOccurred& event) {
+    auto envelope = event_envelope("error_occurred");
+    if (event.session_id.has_value()) {
+        envelope["session_id"] = raw(event.session_id.value());
+    }
+    envelope["component"] = event.component;
+    envelope["message"] = event.message;
+    return envelope.dump();
+}
+
+std::string encode_event(const session::SessionCancelled& event) {
+    auto envelope = event_envelope("session_cancelled");
+    envelope["session_id"] = raw(event.session_id);
+    return envelope.dump();
 }
 
 } // namespace yoru::ipc

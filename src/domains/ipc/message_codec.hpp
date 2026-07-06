@@ -1,7 +1,12 @@
 #pragma once
 
+#include "core/error_event.hpp"
+#include "domains/audio/events.hpp"
 #include "domains/config/configuration.hpp"
+#include "domains/config/events.hpp"
+#include "domains/session/events.hpp"
 #include "domains/session/service_state.hpp"
+#include "domains/speech/events.hpp"
 #include "domains/speech/model.hpp"
 #include "domains/speech/transcript.hpp"
 
@@ -51,5 +56,24 @@ std::string encode_transcript(const std::string& type, const speech::Transcript&
 std::string encode_state(const std::string& type, session::ServiceState state);
 std::string encode_config(const std::string& type, const config::Configuration& configuration);
 std::string encode_models(const std::string& type, const std::vector<speech::Model>& models);
+
+// --- Event encoding ---
+// Pushed to clients that opted in (see EventBridge), never in response
+// to a specific request. Envelope: {"type": "event", "event": "<name>",
+// ...fields}, distinct from the command-response envelope above so a
+// client can tell an unsolicited push apart from an answer to something
+// it sent. RecordingFinished's Recording carries its metadata (duration,
+// sample rate, channels) but never the raw samples: pushing megabytes of
+// audio to every listening client on every recording defeats the point
+// of a lightweight status event.
+
+std::string encode_event(const audio::RecordingStarted& event);
+std::string encode_event(const audio::RecordingFinished& event);
+std::string encode_event(const speech::TranscriptionStarted& event);
+std::string encode_event(const speech::TranscriptionCompleted& event);
+std::string encode_event(const speech::ModelLoaded& event);
+std::string encode_event(const config::ConfigurationChanged& event);
+std::string encode_event(const core::ErrorOccurred& event);
+std::string encode_event(const session::SessionCancelled& event);
 
 } // namespace yoru::ipc

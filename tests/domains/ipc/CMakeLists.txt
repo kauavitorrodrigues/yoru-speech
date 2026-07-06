@@ -3,6 +3,8 @@ add_executable(
     test_ipc_server.cpp
     test_message_codec.cpp
     test_command_dispatcher.cpp
+    test_event_bridge.cpp
+    test_ipc_service.cpp
 )
 
 target_link_libraries(
