@@ -50,6 +50,31 @@ TEST_CASE("start() removes a stale socket file left by a previous run") {
     server.stop();
 }
 
+TEST_CASE("start() on a path already served by another instance reports an error and leaves "
+          "it running") {
+    const auto path = unique_test_socket_path();
+    std::filesystem::remove(path);
+    IpcServer first_server(path);
+    REQUIRE_FALSE(first_server.start().has_value());
+
+    IpcServer second_server(path);
+    const auto error = second_server.start();
+
+    REQUIRE(error.has_value());
+    CHECK(error->message.find("already listening") != std::string::npos);
+    CHECK_FALSE(second_server.is_running());
+    // The live instance must be unaffected: its socket file is still the
+    // one a client would actually reach, not silently replaced.
+    CHECK(first_server.is_running());
+    CHECK(std::filesystem::exists(path));
+
+    // Confirms the path still actually reaches the live server (the
+    // REQUIRE inside TestClient's constructor is the assertion).
+    TestClient client(path);
+
+    first_server.stop();
+}
+
 TEST_CASE("start() twice reports an error without disrupting the running server") {
     const auto path = unique_test_socket_path();
     std::filesystem::remove(path);

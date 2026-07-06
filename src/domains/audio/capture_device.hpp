@@ -61,8 +61,14 @@ public:
 
     bool is_running() const;
 
-private:
+    // Opaque: only capture_device.cpp defines it or names it directly, to
+    // hand a stable pointer to miniaudio's C callbacks (pUserData) without
+    // exposing miniaudio types here. Public only so those free-function
+    // callbacks (which can't be class members, per miniaudio's C API) can
+    // name the type; impl_ below stays the sole, private way to reach one.
     struct Impl;
+
+private:
     std::unique_ptr<Impl> impl_;
 };
 

@@ -103,7 +103,21 @@ std::vector<ValidationError> ConfigurationManager::load() {
                                 "failed to create config directory: " + error_code.message()}};
     }
 
-    if (!std::filesystem::exists(config_path_)) {
+    // The error_code overload of exists() is required here, not just
+    // preferred: the throwing overload raises filesystem_error for a
+    // stat() failure other than "doesn't exist" (e.g. permission denied
+    // on a parent directory), which would otherwise propagate as an
+    // uncaught exception and crash the whole daemon over a config file
+    // permission issue.
+    std::error_code exists_error;
+    const bool config_exists = std::filesystem::exists(config_path_, exists_error);
+    if (exists_error) {
+        configuration_ = Configuration{};
+        return {
+            ValidationError{"<file>", "failed to check config file: " + exists_error.message()}};
+    }
+
+    if (!config_exists) {
         configuration_ = Configuration{};
         if (auto error = write_file_atomically(config_path_, encode_toml(configuration_))) {
             return {ValidationError{"<file>", *error}};

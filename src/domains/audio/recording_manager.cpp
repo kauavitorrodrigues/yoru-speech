@@ -42,7 +42,21 @@ RecordingResult RecordingManager::stop() {
         return RecordingError{"no recording is in progress"};
     }
 
+    // Checked before stop(), which always leaves is_running() false: this
+    // is the only way to tell "the device was already gone when we got
+    // here" (e.g. the microphone was unplugged mid-recording) apart from
+    // an ordinary, requested stop.
+    const bool device_was_lost = !device_.is_running();
     device_.stop();
+
+    if (device_was_lost) {
+        active_session_.reset();
+        {
+            const std::lock_guard lock(samples_mutex_);
+            samples_.clear();
+        }
+        return RecordingError{"capture device stopped unexpectedly (microphone disconnected?)"};
+    }
 
     Recording recording;
     recording.sample_rate = kSampleRate;

@@ -26,7 +26,17 @@ WhisperBackend::~WhisperBackend() {
 }
 
 std::optional<SpeechError> WhisperBackend::load_model(const Model& model) {
-    if (!std::filesystem::exists(model.path)) {
+    // The error_code overload is required, not just preferred: the
+    // throwing overload of exists() raises filesystem_error for a stat()
+    // failure other than "doesn't exist" (e.g. permission denied on the
+    // model directory), which would otherwise be an uncaught exception
+    // that crashes the daemon over a permissions issue.
+    std::error_code exists_error;
+    const bool model_exists = std::filesystem::exists(model.path, exists_error);
+    if (exists_error) {
+        return SpeechError{"failed to check model file: " + exists_error.message()};
+    }
+    if (!model_exists) {
         return SpeechError{"model file not found: " + model.path.string()};
     }
 

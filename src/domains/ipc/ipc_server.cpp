@@ -45,6 +45,34 @@ bool interrupted() {
     return errno == EINTR;
 }
 
+// A socket file at `address` can mean either "a previous run crashed
+// without cleaning up" (stale, safe to remove) or "another instance of
+// this daemon is already listening here" (live, must not be touched).
+// connect() tells them apart: it succeeds only if some process is
+// actually accepting on the path.
+bool is_socket_live(const sockaddr_un& address) {
+    const int probe_fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    if (probe_fd == -1) {
+        return false;
+    }
+    // Non-blocking: a full accept backlog on the other end could
+    // otherwise make a blocking connect() wait indefinitely, stalling
+    // this process's own startup on someone else's socket. Reachability
+    // is all that's needed here, not a completed connection. For AF_UNIX
+    // specifically, a full backlog surfaces as EAGAIN/EWOULDBLOCK, not
+    // the TCP-handshake-style EINPROGRESS (kept for portability, though
+    // it shouldn't actually occur here) — both mean "someone is
+    // listening" and count as live, the same as an immediate success.
+    set_nonblocking(probe_fd);
+    const int result =
+        ::connect(probe_fd, reinterpret_cast<const sockaddr*>(&address), sizeof(address));
+    const bool live =
+        result == 0 ||
+        (result == -1 && (errno == EINPROGRESS || errno == EAGAIN || errno == EWOULDBLOCK));
+    ::close(probe_fd);
+    return live;
+}
+
 } // namespace
 
 std::filesystem::path default_socket_path() {
@@ -88,23 +116,29 @@ std::optional<IpcError> IpcServer::start() {
         return IpcError{"socket path is too long for a Unix domain socket: " + path_string};
     }
 
-    // Remove a stale socket file left over from a previous run. A
-    // missing file is not an error; any other failure means the
-    // subsequent bind() will fail with a clearer, syscall-specific
-    // message anyway, so it isn't checked here.
-    ::unlink(path_string.c_str());
-
-    const int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd == -1) {
-        return IpcError{errno_message("failed to create socket")};
-    }
-
     address.sun_family = AF_UNIX;
     // address is zero-initialized above, so sun_path is already
     // null-terminated even in the boundary case where strncpy's source
     // is exactly sizeof(sun_path) - 1 bytes and writes no terminator of
     // its own.
     std::strncpy(address.sun_path, path_string.c_str(), sizeof(address.sun_path) - 1);
+
+    if (is_socket_live(address)) {
+        return IpcError{"another instance is already listening on " + path_string};
+    }
+
+    // Any remaining socket file at this path is stale (left over from a
+    // previous run that crashed without cleaning up, per the live check
+    // above) and safe to remove. A missing file is not an error; any
+    // other failure means the subsequent bind() will fail with a
+    // clearer, syscall-specific message anyway, so it isn't checked
+    // here.
+    ::unlink(path_string.c_str());
+
+    const int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd == -1) {
+        return IpcError{errno_message("failed to create socket")};
+    }
 
     if (::bind(fd, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) == -1) {
         const auto error = errno_message("failed to bind socket");
