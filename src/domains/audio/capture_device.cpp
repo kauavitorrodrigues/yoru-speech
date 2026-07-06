@@ -10,12 +10,10 @@ namespace yoru::audio {
 
 namespace {
 
-// The format whisper.cpp expects. Fixed on purpose: this project captures
-// for exactly one downstream consumer, so there is no configuration to
-// expose.
+// miniaudio's own format enum has no plain C++ representation, so it stays
+// private to this translation unit; kSampleRate/kChannels are shared with
+// the rest of the domain through the public header.
 constexpr ma_format kCaptureFormat = ma_format_f32;
-constexpr ma_uint32 kCaptureChannels = 1;
-constexpr ma_uint32 kCaptureSampleRate = 16000;
 
 // Runs on miniaudio's own audio thread, which is plain C and not
 // exception-aware: an exception unwinding out of this function is
@@ -26,7 +24,7 @@ void forward_captured_samples(ma_device* device, void* /*output*/, const void* i
                                ma_uint32 frame_count) {
     const auto* callback = static_cast<CaptureCallback*>(device->pUserData);
     // frame_count == sample count only because capture is mono
-    // (kCaptureChannels == 1); revisit if that ever changes.
+    // (kChannels == 1); revisit if that ever changes.
     try {
         (*callback)(static_cast<const float*>(input), frame_count);
     } catch (...) {
@@ -63,8 +61,8 @@ std::optional<CaptureError> CaptureDevice::start() {
 
     ma_device_config config = ma_device_config_init(ma_device_type_capture);
     config.capture.format = kCaptureFormat;
-    config.capture.channels = kCaptureChannels;
-    config.sampleRate = kCaptureSampleRate;
+    config.capture.channels = kChannels;
+    config.sampleRate = kSampleRate;
     config.dataCallback = forward_captured_samples;
     config.pUserData = &impl_->on_samples;
 

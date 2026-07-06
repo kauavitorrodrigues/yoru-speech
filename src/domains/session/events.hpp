@@ -10,14 +10,10 @@ namespace yoru::session {
 // Domain events published in relation to a session's lifecycle. Each
 // represents a fact that already happened, never something expected to
 // happen.
-
-struct RecordingStarted {
-    SessionId session_id;
-};
-
-struct RecordingFinished {
-    SessionId session_id;
-};
+//
+// RecordingStarted and RecordingFinished live in domains/audio instead,
+// since the Recording Manager that publishes them lives there: the domain
+// that publishes an event owns its definition.
 
 struct ErrorOccurred {
     // Absent when the error is not tied to a specific session (e.g. a

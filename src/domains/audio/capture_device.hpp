@@ -1,12 +1,22 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <string>
 
 namespace yoru::audio {
+
+// The format captured audio is delivered in: mono PCM float32 at this
+// sample rate, the format whisper.cpp expects. Exposed so callers that
+// accumulate samples (e.g. the Recording Manager) can tag their buffers
+// without duplicating these values; the actual sample type (float32) has
+// no plain C++ representation to export beyond the CaptureCallback
+// signature below.
+inline constexpr std::uint32_t kSampleRate = 16000;
+inline constexpr std::uint32_t kChannels = 1;
 
 // An error opening or operating the capture device, with a message
 // suitable for logging. Never thrown: reported through

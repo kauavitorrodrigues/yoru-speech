@@ -5,26 +5,7 @@
 
 using yoru::core::EventBus;
 using yoru::session::ErrorOccurred;
-using yoru::session::RecordingFinished;
-using yoru::session::RecordingStarted;
 using yoru::session::SessionId;
-
-TEST_CASE("RecordingStarted and RecordingFinished carry the session id") {
-    EventBus bus;
-    SessionId started_id{};
-    SessionId finished_id{};
-
-    bus.subscribe<RecordingStarted>(
-        [&](const RecordingStarted& event) { started_id = event.session_id; });
-    bus.subscribe<RecordingFinished>(
-        [&](const RecordingFinished& event) { finished_id = event.session_id; });
-
-    bus.publish(RecordingStarted{SessionId{7}});
-    bus.publish(RecordingFinished{SessionId{7}});
-
-    CHECK(started_id == SessionId{7});
-    CHECK(finished_id == SessionId{7});
-}
 
 TEST_CASE("ErrorOccurred allows an absent session id for non-session errors") {
     EventBus bus;
