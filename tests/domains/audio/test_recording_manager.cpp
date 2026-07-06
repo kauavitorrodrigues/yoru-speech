@@ -13,7 +13,7 @@ using yoru::audio::RecordingFinished;
 using yoru::audio::RecordingManager;
 using yoru::audio::RecordingStarted;
 using yoru::core::EventBus;
-using yoru::session::SessionId;
+using yoru::core::SessionId;
 
 // Tests below that call start() need a real capture device. On a host
 // without one (e.g. headless CI), start() reports it through the normal

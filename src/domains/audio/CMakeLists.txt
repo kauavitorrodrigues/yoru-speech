@@ -10,7 +10,6 @@ target_link_libraries(
     yoru-domain-audio
     PUBLIC
         yoru-core
-        yoru-domain-session
     PRIVATE
         PkgConfig::miniaudio
         yoru-warnings

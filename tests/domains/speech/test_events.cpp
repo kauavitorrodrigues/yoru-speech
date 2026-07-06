@@ -4,7 +4,7 @@
 #include <doctest/doctest.h>
 
 using yoru::core::EventBus;
-using yoru::session::SessionId;
+using yoru::core::SessionId;
 using yoru::speech::Model;
 using yoru::speech::ModelLoaded;
 using yoru::speech::Transcript;

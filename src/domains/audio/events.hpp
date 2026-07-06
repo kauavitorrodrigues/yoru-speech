@@ -1,7 +1,7 @@
 #pragma once
 
+#include "core/session_id.hpp"
 #include "domains/audio/recording.hpp"
-#include "domains/session/session.hpp"
 
 namespace yoru::audio {
 
@@ -15,11 +15,11 @@ namespace yoru::audio {
 // lives in this domain, is what publishes them.
 
 struct RecordingStarted {
-    session::SessionId session_id;
+    core::SessionId session_id;
 };
 
 struct RecordingFinished {
-    session::SessionId session_id;
+    core::SessionId session_id;
     Recording recording;
 };
 

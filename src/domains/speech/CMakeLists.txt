@@ -10,7 +10,6 @@ target_link_libraries(
     yoru-domain-speech
     PUBLIC
         yoru-core
-        yoru-domain-session
     PRIVATE
         whisper
         yoru-warnings

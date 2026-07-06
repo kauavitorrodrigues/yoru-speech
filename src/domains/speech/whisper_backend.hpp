@@ -34,8 +34,8 @@ public:
     void unload_model() override;
     bool has_model_loaded() const override;
 
-    TranscriptionResult transcribe(session::SessionId session_id, const std::vector<float>& samples,
-                                    const TranscriptionRequest& request) override;
+    TranscriptionResult transcribe(core::SessionId session_id, const std::vector<float>& samples,
+                                   const TranscriptionRequest& request) override;
 
 private:
     core::EventBus& event_bus_;

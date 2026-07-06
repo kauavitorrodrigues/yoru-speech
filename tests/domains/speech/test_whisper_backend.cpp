@@ -14,6 +14,7 @@
 #include <variant>
 
 using yoru::core::EventBus;
+using yoru::core::SessionId;
 using yoru::speech::Model;
 using yoru::speech::ModelLoaded;
 using yoru::speech::ModelSize;
@@ -23,7 +24,6 @@ using yoru::speech::TranscriptionCompleted;
 using yoru::speech::TranscriptionRequest;
 using yoru::speech::TranscriptionStarted;
 using yoru::speech::WhisperBackend;
-using yoru::session::SessionId;
 
 namespace {
 

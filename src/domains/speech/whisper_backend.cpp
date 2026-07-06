@@ -1,6 +1,6 @@
 #include "domains/speech/whisper_backend.hpp"
 
-#include "domains/session/events.hpp"
+#include "core/error_event.hpp"
 #include "domains/speech/events.hpp"
 
 #include <whisper.h>
@@ -56,9 +56,9 @@ bool WhisperBackend::has_model_loaded() const {
     return impl_->ctx != nullptr;
 }
 
-TranscriptionResult WhisperBackend::transcribe(session::SessionId session_id,
-                                                const std::vector<float>& samples,
-                                                const TranscriptionRequest& request) {
+TranscriptionResult WhisperBackend::transcribe(core::SessionId session_id,
+                                               const std::vector<float>& samples,
+                                               const TranscriptionRequest& request) {
     if (samples.empty()) {
         return SpeechError{"empty audio buffer"};
     }
@@ -86,7 +86,7 @@ TranscriptionResult WhisperBackend::transcribe(session::SessionId session_id,
 
     if (status != 0) {
         const SpeechError error{"whisper_full failed internally"};
-        event_bus_.publish(session::ErrorOccurred{
+        event_bus_.publish(core::ErrorOccurred{
             .session_id = session_id,
             .component = "speech",
             .message = error.message,
@@ -111,8 +111,8 @@ TranscriptionResult WhisperBackend::transcribe(session::SessionId session_id,
         .text = std::move(text),
         .detected_language = detected_language,
         .requested_language = request.language,
-        .audio_duration = std::chrono::milliseconds{
-            static_cast<std::int64_t>(samples.size()) * 1000 / WHISPER_SAMPLE_RATE},
+        .audio_duration = std::chrono::milliseconds{static_cast<std::int64_t>(samples.size()) *
+                                                    1000 / WHISPER_SAMPLE_RATE},
         .processing_time = processing_time,
     };
 

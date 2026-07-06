@@ -9,7 +9,7 @@ using yoru::audio::Recording;
 using yoru::audio::RecordingFinished;
 using yoru::audio::RecordingStarted;
 using yoru::core::EventBus;
-using yoru::session::SessionId;
+using yoru::core::SessionId;
 
 TEST_CASE("RecordingStarted carries the session id") {
     EventBus bus;

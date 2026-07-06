@@ -17,10 +17,10 @@ bool can_transition(SessionState from, SessionState to) {
     return false;
 }
 
-Session::Session(SessionId id, std::chrono::system_clock::time_point created_at)
+Session::Session(core::SessionId id, std::chrono::system_clock::time_point created_at)
     : id_(id), created_at_(created_at) {}
 
-SessionId Session::id() const {
+core::SessionId Session::id() const {
     return id_;
 }
 

@@ -18,7 +18,7 @@ void RecordingManager::on_samples(const float* samples, std::size_t count) {
     samples_.insert(samples_.end(), samples, samples + count);
 }
 
-std::optional<RecordingError> RecordingManager::start(session::SessionId session_id) {
+std::optional<RecordingError> RecordingManager::start(core::SessionId session_id) {
     if (active_session_.has_value()) {
         return RecordingError{"a recording is already in progress"};
     }
@@ -53,7 +53,7 @@ std::optional<RecordingError> RecordingManager::stop() {
         samples_.clear();
     }
 
-    const session::SessionId session_id = *active_session_;
+    const core::SessionId session_id = *active_session_;
     active_session_.reset();
     event_bus_.publish(RecordingFinished{session_id, std::move(recording)});
     return std::nullopt;

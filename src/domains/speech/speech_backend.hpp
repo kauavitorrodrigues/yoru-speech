@@ -1,6 +1,6 @@
 #pragma once
 
-#include "domains/session/session.hpp"
+#include "core/session_id.hpp"
 #include "domains/speech/model.hpp"
 #include "domains/speech/transcript.hpp"
 
@@ -51,9 +51,9 @@ public:
     // Transcribes `samples`, mono PCM float32 at the sample rate the
     // Recording Manager captures in, into a Transcript for `session_id`.
     // Fails if `samples` is empty or no model is loaded.
-    virtual TranscriptionResult transcribe(session::SessionId session_id,
-                                            const std::vector<float>& samples,
-                                            const TranscriptionRequest& request) = 0;
+    virtual TranscriptionResult transcribe(core::SessionId session_id,
+                                           const std::vector<float>& samples,
+                                           const TranscriptionRequest& request) = 0;
 };
 
 } // namespace yoru::speech

@@ -1,8 +1,8 @@
 #pragma once
 
 #include "core/event_bus.hpp"
+#include "core/session_id.hpp"
 #include "domains/audio/capture_device.hpp"
-#include "domains/session/session.hpp"
 
 #include <mutex>
 #include <optional>
@@ -42,7 +42,7 @@ public:
     // `session_id`. Publishes RecordingStarted on success. Returns an
     // error, without side effects, if a recording is already in progress
     // or the device cannot be opened.
-    std::optional<RecordingError> start(session::SessionId session_id);
+    std::optional<RecordingError> start(core::SessionId session_id);
 
     // Stops capture, finalizes the Recording, and publishes
     // RecordingFinished with it. Returns an error, without side effects,
@@ -58,7 +58,7 @@ private:
     CaptureDevice device_;
     std::mutex samples_mutex_;
     std::vector<float> samples_;
-    std::optional<session::SessionId> active_session_;
+    std::optional<core::SessionId> active_session_;
 };
 
 } // namespace yoru::audio

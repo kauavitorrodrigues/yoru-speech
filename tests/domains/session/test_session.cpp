@@ -1,10 +1,12 @@
 #include "domains/session/session.hpp"
 
+#include "core/session_id.hpp"
+
 #include <doctest/doctest.h>
 
+using yoru::core::SessionId;
 using yoru::session::can_transition;
 using yoru::session::Session;
-using yoru::session::SessionId;
 using yoru::session::SessionState;
 
 namespace {

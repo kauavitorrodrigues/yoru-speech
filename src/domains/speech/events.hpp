@@ -1,6 +1,6 @@
 #pragma once
 
-#include "domains/session/session.hpp"
+#include "core/session_id.hpp"
 #include "domains/speech/model.hpp"
 #include "domains/speech/transcript.hpp"
 
@@ -10,11 +10,11 @@ namespace yoru::speech {
 // already happened, never something expected to happen.
 
 struct TranscriptionStarted {
-    yoru::session::SessionId session_id;
+    core::SessionId session_id;
 };
 
 struct TranscriptionCompleted {
-    yoru::session::SessionId session_id;
+    core::SessionId session_id;
     Transcript transcript;
 };
 

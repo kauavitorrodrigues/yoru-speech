@@ -1,11 +1,12 @@
+#include "core/error_event.hpp"
+
 #include "core/event_bus.hpp"
-#include "domains/session/events.hpp"
 
 #include <doctest/doctest.h>
 
+using yoru::core::ErrorOccurred;
 using yoru::core::EventBus;
-using yoru::session::ErrorOccurred;
-using yoru::session::SessionId;
+using yoru::core::SessionId;
 
 TEST_CASE("ErrorOccurred allows an absent session id for non-session errors") {
     EventBus bus;
