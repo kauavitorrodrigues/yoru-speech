@@ -37,7 +37,7 @@ std::optional<RecordingError> RecordingManager::start(core::SessionId session_id
     return std::nullopt;
 }
 
-std::optional<RecordingError> RecordingManager::stop() {
+RecordingResult RecordingManager::stop() {
     if (!active_session_.has_value()) {
         return RecordingError{"no recording is in progress"};
     }
@@ -55,8 +55,8 @@ std::optional<RecordingError> RecordingManager::stop() {
 
     const core::SessionId session_id = *active_session_;
     active_session_.reset();
-    event_bus_.publish(RecordingFinished{session_id, std::move(recording)});
-    return std::nullopt;
+    event_bus_.publish(RecordingFinished{session_id, recording});
+    return recording;
 }
 
 bool RecordingManager::is_recording() const {

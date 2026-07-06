@@ -3,10 +3,12 @@
 #include "core/event_bus.hpp"
 #include "core/session_id.hpp"
 #include "domains/audio/capture_device.hpp"
+#include "domains/audio/recording.hpp"
 
 #include <mutex>
 #include <optional>
 #include <string>
+#include <variant>
 #include <vector>
 
 namespace yoru::audio {
@@ -16,6 +18,10 @@ namespace yoru::audio {
 struct RecordingError {
     std::string message;
 };
+
+// The outcome of stop(): exactly one of the finished Recording or the
+// reason it could not be produced.
+using RecordingResult = std::variant<Recording, RecordingError>;
 
 // Orchestrates microphone capture for one recording at a time. Owns a
 // CaptureDevice, accumulates its output into a Recording, and publishes
@@ -44,10 +50,12 @@ public:
     // or the device cannot be opened.
     std::optional<RecordingError> start(core::SessionId session_id);
 
-    // Stops capture, finalizes the Recording, and publishes
-    // RecordingFinished with it. Returns an error, without side effects,
-    // if no recording is currently in progress.
-    std::optional<RecordingError> stop();
+    // Stops capture and finalizes the Recording. Returns it directly (for
+    // a caller orchestrating the next step synchronously, e.g. the
+    // Session Manager) and also publishes RecordingFinished with the same
+    // Recording (for decoupled subscribers). Returns an error, without
+    // side effects, if no recording is currently in progress.
+    RecordingResult stop();
 
     bool is_recording() const;
 

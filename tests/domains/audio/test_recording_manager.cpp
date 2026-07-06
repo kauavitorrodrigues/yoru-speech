@@ -8,7 +8,10 @@
 #include <chrono>
 #include <optional>
 #include <thread>
+#include <variant>
 
+using yoru::audio::Recording;
+using yoru::audio::RecordingError;
 using yoru::audio::RecordingFinished;
 using yoru::audio::RecordingManager;
 using yoru::audio::RecordingStarted;
@@ -42,9 +45,9 @@ TEST_CASE("stop() without a recording in progress reports an error and does not 
     EventBus bus;
     RecordingManager manager(bus);
 
-    const auto error = manager.stop();
+    const auto result = manager.stop();
 
-    REQUIRE(error.has_value());
+    REQUIRE(std::holds_alternative<RecordingError>(result));
     CHECK_FALSE(manager.is_recording());
 }
 
@@ -67,9 +70,13 @@ TEST_CASE("start() then stop() captures real audio and publishes both events") {
 
     std::this_thread::sleep_for(std::chrono::milliseconds{200});
 
-    const auto stop_error = manager.stop();
-    REQUIRE_FALSE(stop_error.has_value());
+    const auto stop_result = manager.stop();
     CHECK_FALSE(manager.is_recording());
+
+    REQUIRE(std::holds_alternative<Recording>(stop_result));
+    const auto& returned_recording = std::get<Recording>(stop_result);
+    CHECK_FALSE(returned_recording.samples.empty());
+    CHECK(returned_recording.duration() > std::chrono::milliseconds{0});
 
     REQUIRE(started_id.has_value());
     CHECK(started_id.value() == SessionId{42});
