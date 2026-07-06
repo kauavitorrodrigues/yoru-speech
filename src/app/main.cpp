@@ -1,6 +1,8 @@
+#include "core/error_event.hpp"
 #include "core/event_bus.hpp"
 #include "core/logger.hpp"
 #include "domains/audio/recording_manager.hpp"
+#include "domains/clipboard/auto_clipboard.hpp"
 #include "domains/config/configuration_manager.hpp"
 #include "domains/ipc/ipc_service.hpp"
 #include "domains/session/session_manager.hpp"
@@ -57,6 +59,16 @@ int main() {
 
     yoru::core::EventBus event_bus;
 
+    // Logs any fact the rest of the system reports as an error, so a
+    // failure is visible even when no IPC client happens to be
+    // subscribed to events. A full audit of what logs what is Fase 9's
+    // job; this is the minimal wiring that makes today's ErrorOccurred
+    // publishers (WhisperBackend, AutoClipboard) actually observable.
+    event_bus.subscribe<yoru::core::ErrorOccurred>(
+        [&logger](const yoru::core::ErrorOccurred& error) {
+            logger.warn(error.component + ": " + error.message);
+        });
+
     yoru::config::ConfigurationManager configuration_manager(yoru::config::default_config_path(),
                                                              event_bus);
     for (const auto& error : configuration_manager.load()) {
@@ -69,6 +81,7 @@ int main() {
                           yoru::speech::default_models_path(), logger);
 
     yoru::session::SessionManager session_manager(event_bus, recording_manager, speech_backend);
+    yoru::clipboard::AutoClipboard auto_clipboard(event_bus, configuration_manager.current());
 
     yoru::ipc::IpcService ipc_service(event_bus, session_manager, configuration_manager);
     if (const auto error = ipc_service.start()) {
@@ -79,6 +92,13 @@ int main() {
 
     std::signal(SIGINT, handle_stop_signal);
     std::signal(SIGTERM, handle_stop_signal);
+    // Writing to a subprocess's stdin pipe (WlClipboardAdapter) after it
+    // has closed its read end (e.g. it exited before reading) raises
+    // SIGPIPE, whose default disposition kills the process. A local
+    // subprocess's failure must never be able to take the whole daemon
+    // down with it; the write() call already treats a failed write as an
+    // ordinary error value once the signal itself can't terminate us.
+    std::signal(SIGPIPE, SIG_IGN);
 
     while (g_should_stop == 0) {
         ipc_service.poll_once(200);

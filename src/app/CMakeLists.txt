@@ -9,5 +9,6 @@ target_link_libraries(
         yoru-domain-session
         yoru-domain-speech
         yoru-domain-ipc
+        yoru-domain-clipboard
         yoru-warnings
 )
