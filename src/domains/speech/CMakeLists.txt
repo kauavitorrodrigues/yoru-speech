@@ -1,6 +1,17 @@
-# Speech domain: transcription results and recognition model metadata.
-# Header-only for now, no behavior to compile yet. Depends on the session
-# domain only for the SessionId value type used to tag its events.
-add_library(yoru-domain-speech INTERFACE)
-target_include_directories(yoru-domain-speech INTERFACE ${PROJECT_SOURCE_DIR}/src)
-target_link_libraries(yoru-domain-speech INTERFACE yoru-domain-session)
+# Speech domain: transcription results, recognition model metadata, and
+# the Speech Engine. whisper.cpp is encapsulated entirely in
+# whisper_backend.cpp; no other translation unit includes <whisper.h>.
+find_package(whisper REQUIRED)
+
+add_library(yoru-domain-speech whisper_backend.cpp)
+
+target_include_directories(yoru-domain-speech PUBLIC ${PROJECT_SOURCE_DIR}/src)
+target_link_libraries(
+    yoru-domain-speech
+    PUBLIC
+        yoru-core
+        yoru-domain-session
+    PRIVATE
+        whisper
+        yoru-warnings
+)
