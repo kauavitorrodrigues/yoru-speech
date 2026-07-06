@@ -1,13 +1,9 @@
 #include "domains/ipc/ipc_server.hpp"
 
-#include <poll.h>
-#include <sys/socket.h>
-#include <sys/un.h>
-#include <unistd.h>
+#include "test_client.hpp"
 
 #include <doctest/doctest.h>
 
-#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <optional>
@@ -15,82 +11,12 @@
 #include <vector>
 
 using yoru::ipc::IpcServer;
+using yoru::ipc::test::TestClient;
 
 namespace {
 
-// A raw Unix Domain Socket client used only to drive the server under
-// test from the other end, the same role a real IPC client (a Python
-// script, socat) plays in production.
-class TestClient {
-public:
-    explicit TestClient(const std::filesystem::path& socket_path) {
-        fd_ = ::socket(AF_UNIX, SOCK_STREAM, 0);
-        REQUIRE(fd_ != -1);
-
-        sockaddr_un address{};
-        address.sun_family = AF_UNIX;
-        const std::string path_string = socket_path.string();
-        std::strncpy(address.sun_path, path_string.c_str(), sizeof(address.sun_path) - 1);
-
-        REQUIRE(::connect(fd_, reinterpret_cast<const sockaddr*>(&address), sizeof(address)) == 0);
-    }
-
-    ~TestClient() {
-        if (fd_ != -1) {
-            ::close(fd_);
-        }
-    }
-
-    TestClient(const TestClient&) = delete;
-    TestClient& operator=(const TestClient&) = delete;
-
-    void send_line(const std::string& line) const {
-        const std::string data = line + "\n";
-        REQUIRE(::write(fd_, data.data(), data.size()) == static_cast<ssize_t>(data.size()));
-    }
-
-    void send_raw(const std::string& data) const {
-        std::size_t written = 0;
-        while (written < data.size()) {
-            const ssize_t sent = ::write(fd_, data.data() + written, data.size() - written);
-            REQUIRE(sent > 0);
-            written += static_cast<std::size_t>(sent);
-        }
-    }
-
-    void close_connection() {
-        ::close(fd_);
-        fd_ = -1;
-    }
-
-    // Reads until a newline arrives (or `attempts` short waits pass),
-    // returning the line without it. Empty if nothing arrived in time.
-    std::string read_line(int attempts = 20) const {
-        std::string buffer;
-        for (int i = 0; i < attempts; ++i) {
-            pollfd poll_fd{fd_, POLLIN, 0};
-            if (::poll(&poll_fd, 1, 50) > 0 && (poll_fd.revents & POLLIN) != 0) {
-                char chunk[256] = {};
-                const ssize_t bytes_read = ::read(fd_, chunk, sizeof(chunk));
-                if (bytes_read > 0) {
-                    buffer.append(chunk, static_cast<std::size_t>(bytes_read));
-                }
-            }
-            const auto newline_pos = buffer.find('\n');
-            if (newline_pos != std::string::npos) {
-                return buffer.substr(0, newline_pos);
-            }
-        }
-        return buffer;
-    }
-
-private:
-    int fd_ = -1;
-};
-
 std::filesystem::path unique_test_socket_path() {
-    return std::filesystem::temp_directory_path() /
-           ("yoru-speech-test-" + std::to_string(getpid()) + ".sock");
+    return yoru::ipc::test::unique_test_socket_path("yoru-speech-test");
 }
 
 } // namespace
