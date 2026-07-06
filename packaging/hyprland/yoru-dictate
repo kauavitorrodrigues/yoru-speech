@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""Push-to-talk helper for Yoru Speech: sends start_recording/stop_recording
-over the daemon's IPC socket. Meant to be bound to a key press/release in
-a compositor (e.g. Hyprland's bind/bindr)."""
+"""Dictation helper for Yoru Speech: sends start_recording/stop_recording
+over the daemon's IPC socket. `toggle` picks start or stop based on a local
+marker file, so a single key bind works even on compositors whose release
+event ("bindr" and equivalents) isn't delivered reliably; `start`/`stop` remain
+for compositors where a press/release bind does work."""
 import json
 import os
 import shutil
@@ -44,37 +46,57 @@ def notify(title, message):
     subprocess.run(["notify-send", title, message], check=False)
 
 
+def do_start():
+    response = send({"type": "start_recording"})
+    if response.get("ok", False):
+        with open(start_time_path(), "w") as f:
+            f.write(repr(time.monotonic()))
+    else:
+        notify("Yoru Speech", "could not start: " + response.get("error", "unknown error"))
+
+
+def do_stop(check_min_hold):
+    held_seconds = None
+    try:
+        with open(start_time_path()) as f:
+            held_seconds = time.monotonic() - float(f.read())
+        os.remove(start_time_path())
+    except (OSError, ValueError):
+        pass  # No record of a start (e.g. daemon restarted); fall through to stop_recording.
+
+    if check_min_hold and held_seconds is not None and held_seconds < MIN_HOLD_SECONDS:
+        send({"type": "cancel_session"})
+        return
+
+    response = send({"type": "stop_recording"})
+    if response.get("ok", False):
+        notify("Yoru Speech", response.get("text", "").strip() or "(no speech detected)")
+    else:
+        notify("Yoru Speech", "error: " + response.get("error", "unknown error"))
+
+
 def main():
-    if len(sys.argv) != 2 or sys.argv[1] not in ("start", "stop"):
-        print("usage: yoru-dictate start|stop", file=sys.stderr)
+    if len(sys.argv) != 2 or sys.argv[1] not in ("start", "stop", "toggle"):
+        print("usage: yoru-dictate start|stop|toggle", file=sys.stderr)
         sys.exit(1)
 
+    requested = sys.argv[1]
+    # The marker file left by do_start() is also this process's only way to
+    # know, from a single discrete key press, which direction a toggle
+    # should go.
+    action = requested
+    if requested == "toggle":
+        action = "stop" if os.path.exists(start_time_path()) else "start"
+
     try:
-        if sys.argv[1] == "start":
-            response = send({"type": "start_recording"})
-            if response.get("ok", False):
-                with open(start_time_path(), "w") as f:
-                    f.write(repr(time.monotonic()))
-            else:
-                notify("Yoru Speech", "could not start: " + response.get("error", "unknown error"))
+        if action == "start":
+            do_start()
         else:
-            held_seconds = None
-            try:
-                with open(start_time_path()) as f:
-                    held_seconds = time.monotonic() - float(f.read())
-                os.remove(start_time_path())
-            except (OSError, ValueError):
-                pass  # No record of a start (e.g. daemon restarted); fall through to stop_recording.
-
-            if held_seconds is not None and held_seconds < MIN_HOLD_SECONDS:
-                send({"type": "cancel_session"})
-                return
-
-            response = send({"type": "stop_recording"})
-            if response.get("ok", False):
-                notify("Yoru Speech", response.get("text", "").strip() or "(no speech detected)")
-            else:
-                notify("Yoru Speech", "error: " + response.get("error", "unknown error"))
+            # The min-hold-cancel guard exists for a press/release bind,
+            # where an accidental tap of a shared modifier key can fire both
+            # halves within milliseconds. A toggle press is a deliberate,
+            # standalone action, so it always asks for a transcript.
+            do_stop(check_min_hold=(requested == "stop"))
     except (OSError, ConnectionError) as error:
         notify("Yoru Speech", "daemon not reachable: " + str(error))
 
