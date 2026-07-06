@@ -1,0 +1,12 @@
+[Unit]
+Description=Yoru Speech - offline voice dictation daemon
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/yoru-speech
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
