@@ -1,0 +1,83 @@
+#!/usr/bin/env python3
+"""Push-to-talk helper for Yoru Speech: sends start_recording/stop_recording
+over the daemon's IPC socket. Meant to be bound to a key press/release in
+a compositor (e.g. Hyprland's bind/bindr)."""
+import json
+import os
+import shutil
+import socket
+import subprocess
+import sys
+import time
+
+# A key press/release bind fires on the raw hardware event, with no
+# minimum hold duration of its own: an accidental tap would otherwise
+# still start and stop a real session, producing a near-empty transcript
+# that overwrites the clipboard. Below this threshold, stop cancels the
+# session instead of asking for a transcript.
+MIN_HOLD_SECONDS = 0.15
+
+
+def socket_path():
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
+    return os.path.join(runtime_dir, "yoru-speech.sock")
+
+
+def start_time_path():
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
+    return os.path.join(runtime_dir, "yoru-dictate-start-time")
+
+
+def send(command):
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(5)
+    sock.connect(socket_path())
+    sock.send((json.dumps(command) + "\n").encode())
+    data = sock.recv(65536)
+    sock.close()
+    return json.loads(data.decode())
+
+
+def notify(title, message):
+    if shutil.which("notify-send") is None:
+        return
+    subprocess.run(["notify-send", title, message], check=False)
+
+
+def main():
+    if len(sys.argv) != 2 or sys.argv[1] not in ("start", "stop"):
+        print("usage: yoru-dictate start|stop", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        if sys.argv[1] == "start":
+            response = send({"type": "start_recording"})
+            if response.get("ok", False):
+                with open(start_time_path(), "w") as f:
+                    f.write(repr(time.monotonic()))
+            else:
+                notify("Yoru Speech", "could not start: " + response.get("error", "unknown error"))
+        else:
+            held_seconds = None
+            try:
+                with open(start_time_path()) as f:
+                    held_seconds = time.monotonic() - float(f.read())
+                os.remove(start_time_path())
+            except (OSError, ValueError):
+                pass  # No record of a start (e.g. daemon restarted); fall through to stop_recording.
+
+            if held_seconds is not None and held_seconds < MIN_HOLD_SECONDS:
+                send({"type": "cancel_session"})
+                return
+
+            response = send({"type": "stop_recording"})
+            if response.get("ok", False):
+                notify("Yoru Speech", response.get("text", "").strip() or "(no speech detected)")
+            else:
+                notify("Yoru Speech", "error: " + response.get("error", "unknown error"))
+    except (OSError, ConnectionError) as error:
+        notify("Yoru Speech", "daemon not reachable: " + str(error))
+
+
+if __name__ == "__main__":
+    main()
