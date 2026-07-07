@@ -77,6 +77,18 @@ public:
         return transcript;
     }
 
+    TranscriptionResult transcribe_partial(const std::vector<float>& window,
+                                           const TranscriptionRequest& request) override {
+        return Transcript{
+            .text = "fake partial transcript",
+            .detected_language = "en",
+            .requested_language = request.language,
+            .audio_duration = std::chrono::milliseconds{static_cast<std::int64_t>(window.size()) *
+                                                        1000 / yoru::audio::kSampleRate},
+            .processing_time = std::chrono::milliseconds{1},
+        };
+    }
+
 private:
     EventBus& event_bus_;
 };

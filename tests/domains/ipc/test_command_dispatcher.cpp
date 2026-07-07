@@ -61,6 +61,11 @@ public:
             .processing_time = std::chrono::milliseconds{1},
         };
     }
+
+    TranscriptionResult transcribe_partial(const std::vector<float>& window,
+                                           const TranscriptionRequest& request) override {
+        return transcribe(yoru::core::SessionId{0}, window, request);
+    }
 };
 
 std::filesystem::path unique_test_config_path() {

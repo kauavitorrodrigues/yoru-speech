@@ -70,6 +70,11 @@ public:
         };
     }
 
+    TranscriptionResult transcribe_partial(const std::vector<float>& window,
+                                           const TranscriptionRequest& request) override {
+        return transcribe(SessionId{0}, window, request);
+    }
+
     bool should_fail = false;
 };
 

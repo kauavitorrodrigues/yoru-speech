@@ -37,7 +37,17 @@ public:
     TranscriptionResult transcribe(core::SessionId session_id, const std::vector<float>& samples,
                                    const TranscriptionRequest& request) override;
 
+    TranscriptionResult transcribe_partial(const std::vector<float>& window,
+                                           const TranscriptionRequest& request) override;
+
 private:
+    // Runs whisper_full over `samples` and builds the resulting Transcript,
+    // without publishing any event: transcribe() and transcribe_partial()
+    // each publish a different pair of events around this shared core, and
+    // must not duplicate whisper_full's setup and segment collection.
+    TranscriptionResult run_whisper_full(const std::vector<float>& samples,
+                                         const TranscriptionRequest& request);
+
     core::EventBus& event_bus_;
     struct Impl;
     std::unique_ptr<Impl> impl_;

@@ -66,17 +66,14 @@ bool WhisperBackend::has_model_loaded() const {
     return impl_->ctx != nullptr;
 }
 
-TranscriptionResult WhisperBackend::transcribe(core::SessionId session_id,
-                                               const std::vector<float>& samples,
-                                               const TranscriptionRequest& request) {
+TranscriptionResult WhisperBackend::run_whisper_full(const std::vector<float>& samples,
+                                                      const TranscriptionRequest& request) {
     if (samples.empty()) {
         return SpeechError{"empty audio buffer"};
     }
     if (impl_->ctx == nullptr) {
         return SpeechError{"no model loaded"};
     }
-
-    event_bus_.publish(TranscriptionStarted{session_id});
 
     whisper_full_params params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
     params.print_progress = false;
@@ -94,6 +91,17 @@ TranscriptionResult WhisperBackend::transcribe(core::SessionId session_id,
     params.language = auto_detect ? "auto" : request.language.c_str();
     params.detect_language = false;
 
+    // Conditions the decoder with an example of the vocabulary/style to
+    // expect (e.g. Portuguese speech with embedded English technical
+    // terms), helping it avoid collapsing mixed-language audio into a
+    // single language. carry_initial_prompt re-applies it to every
+    // internal decode window, not just the first, in case a single call
+    // spans more than whisper.cpp's own ~30s window. See
+    // config::Configuration::transcription_prompt.
+    const bool has_prompt = !request.initial_prompt.empty();
+    params.initial_prompt = has_prompt ? request.initial_prompt.c_str() : nullptr;
+    params.carry_initial_prompt = has_prompt;
+
     const auto started_at = std::chrono::steady_clock::now();
     const int status =
         whisper_full(impl_->ctx, params, samples.data(), static_cast<int>(samples.size()));
@@ -101,13 +109,7 @@ TranscriptionResult WhisperBackend::transcribe(core::SessionId session_id,
         std::chrono::steady_clock::now() - started_at);
 
     if (status != 0) {
-        const SpeechError error{"whisper_full failed internally"};
-        event_bus_.publish(core::ErrorOccurred{
-            .session_id = session_id,
-            .component = "speech",
-            .message = error.message,
-        });
-        return error;
+        return SpeechError{"whisper_full failed internally"};
     }
 
     std::string text;
@@ -123,7 +125,7 @@ TranscriptionResult WhisperBackend::transcribe(core::SessionId session_id,
     const char* lang_str = lang_id >= 0 ? whisper_lang_str(lang_id) : nullptr;
     const std::string detected_language = lang_str != nullptr ? lang_str : "";
 
-    Transcript transcript{
+    return Transcript{
         .text = std::move(text),
         .detected_language = detected_language,
         .requested_language = request.language,
@@ -131,9 +133,45 @@ TranscriptionResult WhisperBackend::transcribe(core::SessionId session_id,
                                                     1000 / WHISPER_SAMPLE_RATE},
         .processing_time = processing_time,
     };
+}
 
+TranscriptionResult WhisperBackend::transcribe(core::SessionId session_id,
+                                               const std::vector<float>& samples,
+                                               const TranscriptionRequest& request) {
+    // Rejected before TranscriptionStarted is published: nothing was
+    // actually attempted, so there is nothing to report as "started".
+    // run_whisper_full() re-checks both conditions below; duplicated here
+    // only to gate the TranscriptionStarted publish — do not remove this
+    // pair to "simplify", or an empty/model-less call starts reporting a
+    // spurious TranscriptionStarted.
+    if (samples.empty()) {
+        return SpeechError{"empty audio buffer"};
+    }
+    if (impl_->ctx == nullptr) {
+        return SpeechError{"no model loaded"};
+    }
+
+    event_bus_.publish(TranscriptionStarted{session_id});
+
+    const TranscriptionResult result = run_whisper_full(samples, request);
+
+    if (const auto* error = std::get_if<SpeechError>(&result)) {
+        event_bus_.publish(core::ErrorOccurred{
+            .session_id = session_id,
+            .component = "speech",
+            .message = error->message,
+        });
+        return *error;
+    }
+
+    const auto& transcript = std::get<Transcript>(result);
     event_bus_.publish(TranscriptionCompleted{session_id, transcript});
     return transcript;
+}
+
+TranscriptionResult WhisperBackend::transcribe_partial(const std::vector<float>& window,
+                                                        const TranscriptionRequest& request) {
+    return run_whisper_full(window, request);
 }
 
 } // namespace yoru::speech

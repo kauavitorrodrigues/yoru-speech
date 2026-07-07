@@ -23,6 +23,10 @@ struct SpeechError {
 struct TranscriptionRequest {
     // Requested language code, or "auto" to let the backend detect it.
     std::string language = "auto";
+    // Conditioning hint passed to the backend before transcribing (see
+    // config::Configuration::transcription_prompt for the rationale).
+    // Empty means no hint.
+    std::string initial_prompt;
 };
 
 // The outcome of transcribe(): exactly one of a Transcript or the reason
@@ -54,6 +58,19 @@ public:
     virtual TranscriptionResult transcribe(core::SessionId session_id,
                                            const std::vector<float>& samples,
                                            const TranscriptionRequest& request) = 0;
+
+    // Transcribes `window`, a chunk of audio observed so far during an
+    // in-progress recording (not necessarily the full session), into a
+    // Transcript. Unlike transcribe(), publishes no events: this method
+    // has no notion of "session" or "started"/"completed" at all — it is
+    // a pure function from audio to text, meant to be called repeatedly
+    // (by the Live Transcriber) while recording is in progress. All
+    // policy about what, if anything, gets surfaced to the rest of the
+    // system from these raw results belongs to the caller (see
+    // session::LiveTranscriber), not to the backend. Fails the same way
+    // transcribe() does: empty `window` or no model loaded.
+    virtual TranscriptionResult transcribe_partial(const std::vector<float>& window,
+                                                   const TranscriptionRequest& request) = 0;
 };
 
 } // namespace yoru::speech
