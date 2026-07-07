@@ -75,5 +75,6 @@ std::string encode_event(const speech::ModelLoaded& event);
 std::string encode_event(const config::ConfigurationChanged& event);
 std::string encode_event(const core::ErrorOccurred& event);
 std::string encode_event(const session::SessionCancelled& event);
+std::string encode_event(const session::TranscriptionPartial& event);
 
 } // namespace yoru::ipc

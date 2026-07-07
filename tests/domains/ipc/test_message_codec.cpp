@@ -25,6 +25,7 @@ using yoru::ipc::encode_transcript;
 using yoru::ipc::parse_message;
 using yoru::session::ServiceState;
 using yoru::session::SessionCancelled;
+using yoru::session::TranscriptionPartial;
 using yoru::speech::Model;
 using yoru::speech::ModelLoaded;
 using yoru::speech::ModelSize;
@@ -74,7 +75,8 @@ TEST_CASE("decode_set_config() decodes a fully populated request") {
         "default_language": "pt",
         "selected_model": "small",
         "auto_clipboard": false,
-        "model_load_policy": "always_loaded"
+        "model_load_policy": "always_loaded",
+        "transcription_prompt": "mixing English terms into Portuguese speech"
     })",
                                            Configuration{});
 
@@ -83,6 +85,15 @@ TEST_CASE("decode_set_config() decodes a fully populated request") {
     CHECK(decoded.configuration.selected_model == "small");
     CHECK_FALSE(decoded.configuration.auto_clipboard);
     CHECK(decoded.configuration.model_load_policy == ModelLoadPolicy::AlwaysLoaded);
+    CHECK(decoded.configuration.transcription_prompt ==
+         "mixing English terms into Portuguese speech");
+}
+
+TEST_CASE("decode_set_config() rejects transcription_prompt with the wrong JSON type") {
+    const auto decoded =
+        decode_set_config(R"({"type": "set_config", "transcription_prompt": 42})", Configuration{});
+
+    REQUIRE(decoded.error.has_value());
 }
 
 TEST_CASE(
@@ -175,6 +186,7 @@ TEST_CASE("encode_config() carries every Configuration field") {
     configuration.selected_model = "small";
     configuration.auto_clipboard = false;
     configuration.model_load_policy = ModelLoadPolicy::AlwaysLoaded;
+    configuration.transcription_prompt = "mixing English terms into Portuguese speech";
 
     const auto encoded = encode_config("get_config", configuration);
 
@@ -182,6 +194,7 @@ TEST_CASE("encode_config() carries every Configuration field") {
     CHECK(encoded.find(R"("selected_model":"small")") != std::string::npos);
     CHECK(encoded.find(R"("auto_clipboard":false)") != std::string::npos);
     CHECK(encoded.find(R"("model_load_policy":"always_loaded")") != std::string::npos);
+    CHECK(encoded.find("mixing English terms into Portuguese speech") != std::string::npos);
 }
 
 TEST_CASE("encode_models() carries every Model field for every model in the list") {
@@ -261,6 +274,16 @@ TEST_CASE("encode_event() for TranscriptionCompleted carries the Transcript") {
     CHECK(encoded.find(R"("audio_duration_ms":2000)") != std::string::npos);
 }
 
+TEST_CASE("encode_event() for TranscriptionPartial carries the session id, committed and tail text") {
+    const auto encoded = encode_event(TranscriptionPartial{
+        .session_id = SessionId{5}, .committed_text = "olá mundo", .tail_text = "como vai"});
+
+    CHECK(encoded.find(R"("event":"transcription_partial")") != std::string::npos);
+    CHECK(encoded.find(R"("session_id":5)") != std::string::npos);
+    CHECK(encoded.find("mundo") != std::string::npos);
+    CHECK(encoded.find("como vai") != std::string::npos);
+}
+
 TEST_CASE("encode_event() for ModelLoaded carries the Model") {
     const auto encoded = encode_event(ModelLoaded{
         .model =
@@ -280,11 +303,13 @@ TEST_CASE("encode_event() for ModelLoaded carries the Model") {
 TEST_CASE("encode_event() for ConfigurationChanged carries the new Configuration") {
     Configuration configuration;
     configuration.default_language = "pt";
+    configuration.transcription_prompt = "mixing English terms into Portuguese speech";
 
     const auto encoded = encode_event(ConfigurationChanged{.configuration = configuration});
 
     CHECK(encoded.find(R"("event":"configuration_changed")") != std::string::npos);
     CHECK(encoded.find(R"("default_language":"pt")") != std::string::npos);
+    CHECK(encoded.find("mixing English terms into Portuguese speech") != std::string::npos);
 }
 
 TEST_CASE("encode_event() for ErrorOccurred omits session_id when absent") {

@@ -29,6 +29,8 @@ EventBridge::EventBridge(core::EventBus& event_bus, IpcServer& server)
         [this](const speech::TranscriptionStarted& event) { broadcast(event); });
     event_bus_.subscribe<speech::TranscriptionCompleted>(
         [this](const speech::TranscriptionCompleted& event) { broadcast(event); });
+    event_bus_.subscribe<session::TranscriptionPartial>(
+        [this](const session::TranscriptionPartial& event) { broadcast(event); });
     event_bus_.subscribe<speech::ModelLoaded>(
         [this](const speech::ModelLoaded& event) { broadcast(event); });
     event_bus_.subscribe<config::ConfigurationChanged>(

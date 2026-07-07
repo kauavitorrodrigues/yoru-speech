@@ -9,11 +9,12 @@ namespace yoru::ipc {
 
 // Bridges EventBus facts to connected IPC clients that opted in. Every
 // domain event (RecordingStarted, RecordingFinished, TranscriptionStarted,
-// TranscriptionCompleted, ModelLoaded, ConfigurationChanged,
-// ErrorOccurred, SessionCancelled) is encoded (see message_codec.hpp) and
-// pushed to every subscribed client via IpcServer::send_line() as soon as
-// it's published. Implements no domain logic: only serializes and fans
-// out facts the rest of the system already produced.
+// TranscriptionCompleted, TranscriptionPartial, ModelLoaded,
+// ConfigurationChanged, ErrorOccurred, SessionCancelled) is encoded (see
+// message_codec.hpp) and pushed to every subscribed client via
+// IpcServer::send_line() as soon as it's published. Implements no domain
+// logic: only serializes and fans out facts the rest of the system
+// already produced.
 //
 // Clients are NOT subscribed by default: subscribe()/unsubscribe() are
 // meant to be called in response to a client's own request message (see
@@ -29,7 +30,7 @@ class EventBridge {
 public:
     // `event_bus` and `server` must outlive this bridge. Stronger than it
     // sounds: EventBus::subscribe() has no unsubscribe (see its own
-    // docs), so the 8 handlers this constructor registers stay live for
+    // docs), so the 9 handlers this constructor registers stay live for
     // event_bus's entire remaining lifetime, each capturing `this`. No
     // event may be published on `event_bus` after this bridge is
     // destroyed: doing so would invoke a callback into a destroyed

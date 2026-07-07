@@ -131,6 +131,14 @@ DecodedSetConfig decode_set_config(const std::string& line, const config::Config
         configuration.model_load_policy = policy.value();
     }
 
+    if (parsed.contains("transcription_prompt")) {
+        if (!parsed.at("transcription_prompt").is_string()) {
+            return DecodedSetConfig{.configuration = base,
+                                    .error = "transcription_prompt must be a string"};
+        }
+        configuration.transcription_prompt = parsed.at("transcription_prompt").get<std::string>();
+    }
+
     return DecodedSetConfig{.configuration = configuration, .error = std::nullopt};
 }
 
@@ -167,6 +175,7 @@ std::string encode_config(const std::string& type, const config::Configuration& 
         {"selected_model", configuration.selected_model},
         {"auto_clipboard", configuration.auto_clipboard},
         {"model_load_policy", to_string(configuration.model_load_policy)},
+        {"transcription_prompt", configuration.transcription_prompt},
     }
         .dump();
 }
@@ -217,6 +226,14 @@ std::string encode_event(const speech::TranscriptionCompleted& event) {
     return envelope.dump();
 }
 
+std::string encode_event(const session::TranscriptionPartial& event) {
+    auto envelope = event_envelope("transcription_partial");
+    envelope["session_id"] = raw(event.session_id);
+    envelope["committed_text"] = event.committed_text;
+    envelope["tail_text"] = event.tail_text;
+    return envelope.dump();
+}
+
 std::string encode_event(const speech::ModelLoaded& event) {
     auto envelope = event_envelope("model_loaded");
     envelope["name"] = event.model.name;
@@ -233,6 +250,7 @@ std::string encode_event(const config::ConfigurationChanged& event) {
     envelope["selected_model"] = event.configuration.selected_model;
     envelope["auto_clipboard"] = event.configuration.auto_clipboard;
     envelope["model_load_policy"] = to_string(event.configuration.model_load_policy);
+    envelope["transcription_prompt"] = event.configuration.transcription_prompt;
     return envelope.dump();
 }
 

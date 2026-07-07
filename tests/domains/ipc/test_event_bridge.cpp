@@ -17,6 +17,7 @@ using yoru::ipc::IpcServer;
 using yoru::ipc::test::TestClient;
 using yoru::ipc::test::unique_test_socket_path;
 using yoru::session::SessionCancelled;
+using yoru::session::TranscriptionPartial;
 
 TEST_CASE("is_subscribed() reflects subscribe()/unsubscribe()") {
     EventBus bus;
@@ -98,6 +99,40 @@ TEST_CASE("a subscribed client receives a pushed event; an unsubscribed one does
     // subscribed client's read_line() used.
     const std::string not_received = unsubscribed_client.read_line(5);
     CHECK(not_received.empty());
+
+    server.stop();
+}
+
+TEST_CASE("a subscribed client receives TranscriptionPartial events") {
+    const auto path = unique_test_socket_path("yoru-speech-test-event-bridge");
+    std::filesystem::remove(path);
+    EventBus bus;
+    IpcServer server(path);
+    REQUIRE_FALSE(server.start().has_value());
+    EventBridge bridge(bus, server);
+
+    TestClient client(path);
+    std::optional<IpcServer::ClientId> client_id;
+    for (int i = 0; i < 20 && !client_id.has_value(); ++i) {
+        server.poll_once(
+            10, [](IpcServer::ClientId, const std::string&) {}, [](IpcServer::ClientId) {});
+    }
+    client.send_line("hello");
+    for (int i = 0; i < 20 && !client_id.has_value(); ++i) {
+        server.poll_once(
+            50, [&](IpcServer::ClientId id, const std::string&) { client_id = id; },
+            [](IpcServer::ClientId) {});
+    }
+    REQUIRE(client_id.has_value());
+    bridge.subscribe(client_id.value());
+
+    bus.publish(TranscriptionPartial{
+        .session_id = SessionId{7}, .committed_text = "olá", .tail_text = "falando agora"});
+
+    const std::string received = client.read_line();
+    CHECK(received.find(R"("event":"transcription_partial")") != std::string::npos);
+    CHECK(received.find(R"("session_id":7)") != std::string::npos);
+    CHECK(received.find("falando agora") != std::string::npos);
 
     server.stop();
 }
