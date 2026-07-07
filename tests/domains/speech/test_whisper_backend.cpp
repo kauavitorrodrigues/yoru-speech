@@ -27,19 +27,20 @@ using yoru::speech::WhisperBackend;
 
 namespace {
 
-// Installed by the `whisper.cpp-model-tiny-q5_1` AUR package, used here as
-// a real model to validate against instead of mocking whisper.cpp.
-// Environments without it (e.g. a fresh CI host) skip the tests that need
-// it rather than failing on a missing environment dependency.
-const std::filesystem::path kTinyModelPath =
-    "/usr/share/whisper.cpp-model-tiny-q5_1/ggml-tiny-q5_1.bin";
+// Installed by the `whisper.cpp-model-large-v3-turbo-q5_0` AUR package,
+// used here as a real model to validate against instead of mocking
+// whisper.cpp. Environments without it (e.g. a fresh CI host) skip the
+// tests that need it rather than failing on a missing environment
+// dependency.
+const std::filesystem::path kTurboModelPath =
+    "/usr/share/whisper.cpp-model-large-v3-turbo-q5_0/ggml-large-v3-turbo-q5_0.bin";
 
-Model tiny_model() {
+Model turbo_model() {
     return Model{
-        .name = "ggml-tiny-q5_1",
-        .size = ModelSize::Tiny,
+        .name = "ggml-large-v3-turbo-q5_0",
+        .size = ModelSize::Large,
         .supported_language = "multi",
-        .path = kTinyModelPath,
+        .path = kTurboModelPath,
         .backend = "whisper.cpp",
     };
 }
@@ -99,8 +100,8 @@ TEST_CASE("transcribe() reports an error when no model is loaded") {
 }
 
 TEST_CASE("load_model() with a real model succeeds and publishes ModelLoaded") {
-    if (!std::filesystem::exists(kTinyModelPath)) {
-        MESSAGE("skipping: tiny model not installed (", kTinyModelPath.string(), ")");
+    if (!std::filesystem::exists(kTurboModelPath)) {
+        MESSAGE("skipping: large-v3-turbo model not installed (", kTurboModelPath.string(), ")");
         return;
     }
 
@@ -110,17 +111,17 @@ TEST_CASE("load_model() with a real model succeeds and publishes ModelLoaded") {
     std::optional<Model> loaded;
     bus.subscribe<ModelLoaded>([&](const ModelLoaded& event) { loaded = event.model; });
 
-    const auto error = backend.load_model(tiny_model());
+    const auto error = backend.load_model(turbo_model());
 
     REQUIRE_FALSE(error.has_value());
     CHECK(backend.has_model_loaded());
     REQUIRE(loaded.has_value());
-    CHECK(loaded->name == "ggml-tiny-q5_1");
+    CHECK(loaded->name == "ggml-large-v3-turbo-q5_0");
 }
 
 TEST_CASE("transcribe() with a real model produces a Transcript and publishes both events") {
-    if (!std::filesystem::exists(kTinyModelPath)) {
-        MESSAGE("skipping: tiny model not installed (", kTinyModelPath.string(), ")");
+    if (!std::filesystem::exists(kTurboModelPath)) {
+        MESSAGE("skipping: large-v3-turbo model not installed (", kTurboModelPath.string(), ")");
         return;
     }
 
@@ -134,7 +135,7 @@ TEST_CASE("transcribe() with a real model produces a Transcript and publishes bo
     bus.subscribe<TranscriptionCompleted>(
         [&](const TranscriptionCompleted& event) { completed_transcript = event.transcript; });
 
-    REQUIRE_FALSE(backend.load_model(tiny_model()).has_value());
+    REQUIRE_FALSE(backend.load_model(turbo_model()).has_value());
 
     const auto result = backend.transcribe(SessionId{7}, one_second_tone(), TranscriptionRequest{});
 

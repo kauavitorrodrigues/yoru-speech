@@ -95,7 +95,7 @@ The install script handles all of these automatically on Arch.
 | `tomlplusplus` | pacman | Configuration file parsing |
 | `nlohmann-json` | pacman | IPC message encoding |
 | `wl-clipboard` | pacman | Clipboard integration (Wayland) |
-| `whisper.cpp-model-tiny-q5_1` | AUR (`yay`) | Starter recognition model |
+| `whisper.cpp-model-large-v3-turbo-q5_0` | AUR (`yay`) | Starter recognition model |
 
 **Also required:**
 - CMake 3.20+ and a C++20 compiler

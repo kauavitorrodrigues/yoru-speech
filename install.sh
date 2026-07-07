@@ -10,8 +10,8 @@ BUILD_DIR="$YORU_SPEECH_DIR/build"
 BIN_DIR="$HOME/.local/bin"
 SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
 MODELS_DIR="$HOME/.local/share/yoru-speech/models"
-AUR_MODEL_PKG="whisper.cpp-model-tiny-q5_1"
-AUR_MODEL_FILE="/usr/share/whisper.cpp-model-tiny-q5_1/ggml-tiny-q5_1.bin"
+AUR_MODEL_PKG="whisper.cpp-model-large-v3-turbo-q5_0"
+AUR_MODEL_FILE="/usr/share/whisper.cpp-model-large-v3-turbo-q5_0/ggml-large-v3-turbo-q5_0.bin"
 
 # ── colors ────────────────────────────────────────────────────────────────────
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'

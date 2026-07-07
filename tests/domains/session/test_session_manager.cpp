@@ -205,9 +205,9 @@ TEST_CASE("a transcription failure transitions to Error, and cancel_session() re
 
 TEST_CASE("end-to-end with a real whisper.cpp model produces a Transcript from real audio") {
     const std::filesystem::path model_path =
-        "/usr/share/whisper.cpp-model-tiny-q5_1/ggml-tiny-q5_1.bin";
+        "/usr/share/whisper.cpp-model-large-v3-turbo-q5_0/ggml-large-v3-turbo-q5_0.bin";
     if (!std::filesystem::exists(model_path)) {
-        MESSAGE("skipping: tiny model not installed (", model_path.string(), ")");
+        MESSAGE("skipping: large-v3-turbo model not installed (", model_path.string(), ")");
         return;
     }
 
@@ -216,8 +216,8 @@ TEST_CASE("end-to-end with a real whisper.cpp model produces a Transcript from r
     yoru::speech::WhisperBackend speech_backend(bus);
     REQUIRE_FALSE(speech_backend
                       .load_model(Model{
-                          .name = "ggml-tiny-q5_1",
-                          .size = yoru::speech::ModelSize::Tiny,
+                          .name = "ggml-large-v3-turbo-q5_0",
+                          .size = yoru::speech::ModelSize::Large,
                           .supported_language = "multi",
                           .path = model_path,
                           .backend = "whisper.cpp",
