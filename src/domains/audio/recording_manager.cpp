@@ -77,4 +77,13 @@ bool RecordingManager::is_recording() const {
     return active_session_.has_value();
 }
 
+std::vector<float> RecordingManager::samples_snapshot(std::size_t start_index) const {
+    const std::lock_guard lock(samples_mutex_);
+    if (start_index >= samples_.size()) {
+        return {};
+    }
+    return std::vector<float>(samples_.begin() + static_cast<std::ptrdiff_t>(start_index),
+                              samples_.end());
+}
+
 } // namespace yoru::audio

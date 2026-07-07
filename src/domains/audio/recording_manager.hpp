@@ -59,12 +59,24 @@ public:
 
     bool is_recording() const;
 
+    // A copy of every sample captured so far in the recording currently in
+    // progress, from `start_index` onward (0 = everything), without
+    // stopping it. Empty if no recording is active or `start_index` is at
+    // or beyond what's been captured so far. For a component that needs
+    // to observe the audio while it's still being captured (e.g. the Live
+    // Transcriber re-transcribing the not-yet-committed tail of a
+    // recording on a timer) rather than only once the full Recording is
+    // finalized by stop(). `start_index` lets such a caller re-read only
+    // the portion it hasn't already committed, instead of paying to copy
+    // and hold the lock over the entire buffer on every call.
+    std::vector<float> samples_snapshot(std::size_t start_index) const;
+
 private:
     void on_samples(const float* samples, std::size_t count);
 
     core::EventBus& event_bus_;
     CaptureDevice device_;
-    std::mutex samples_mutex_;
+    mutable std::mutex samples_mutex_;
     std::vector<float> samples_;
     std::optional<core::SessionId> active_session_;
 };
