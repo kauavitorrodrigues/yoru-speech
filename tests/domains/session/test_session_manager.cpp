@@ -4,6 +4,7 @@
 #include "core/event_bus.hpp"
 #include "domains/audio/events.hpp"
 #include "domains/audio/recording_manager.hpp"
+#include "domains/config/events.hpp"
 #include "domains/session/events.hpp"
 #include "domains/session/service_state.hpp"
 #include "domains/speech/events.hpp"
@@ -20,6 +21,7 @@
 #include <variant>
 
 using yoru::audio::RecordingManager;
+using yoru::config::Configuration;
 using yoru::core::ErrorOccurred;
 using yoru::core::EventBus;
 using yoru::core::SessionId;
@@ -57,6 +59,7 @@ public:
 
     TranscriptionResult transcribe(SessionId /*session_id*/, const std::vector<float>& samples,
                                    const TranscriptionRequest& request) override {
+        last_request = request;
         if (should_fail) {
             return SpeechError{"fake transcription failure"};
         }
@@ -76,6 +79,7 @@ public:
     }
 
     bool should_fail = false;
+    std::optional<TranscriptionRequest> last_request;
 };
 
 // Every test here that records needs a real capture device. Skip
@@ -95,7 +99,7 @@ TEST_CASE("start_session() twice reports that a session is already active") {
     EventBus bus;
     RecordingManager recording_manager(bus);
     FakeSpeechBackend speech_backend;
-    SessionManager manager(bus, recording_manager, speech_backend);
+    SessionManager manager(bus, recording_manager, speech_backend, Configuration{});
 
     if (skip_if_no_device(manager.start_session())) {
         return;
@@ -112,7 +116,7 @@ TEST_CASE("stop_session() without an active session reports an error") {
     EventBus bus;
     RecordingManager recording_manager(bus);
     FakeSpeechBackend speech_backend;
-    SessionManager manager(bus, recording_manager, speech_backend);
+    SessionManager manager(bus, recording_manager, speech_backend, Configuration{});
 
     const auto result = manager.stop_session();
 
@@ -124,7 +128,7 @@ TEST_CASE("cancel_session() when idle reports an error") {
     EventBus bus;
     RecordingManager recording_manager(bus);
     FakeSpeechBackend speech_backend;
-    SessionManager manager(bus, recording_manager, speech_backend);
+    SessionManager manager(bus, recording_manager, speech_backend, Configuration{});
 
     const auto error = manager.cancel_session();
 
@@ -135,7 +139,7 @@ TEST_CASE("cancel_session() during recording releases the device and returns to 
     EventBus bus;
     RecordingManager recording_manager(bus);
     FakeSpeechBackend speech_backend;
-    SessionManager manager(bus, recording_manager, speech_backend);
+    SessionManager manager(bus, recording_manager, speech_backend, Configuration{});
 
     if (skip_if_no_device(manager.start_session())) {
         return;
@@ -162,7 +166,7 @@ TEST_CASE("start then stop runs the full cycle and returns the Transcript") {
     EventBus bus;
     RecordingManager recording_manager(bus);
     FakeSpeechBackend speech_backend;
-    SessionManager manager(bus, recording_manager, speech_backend);
+    SessionManager manager(bus, recording_manager, speech_backend, Configuration{});
 
     if (skip_if_no_device(manager.start_session())) {
         return;
@@ -177,12 +181,55 @@ TEST_CASE("start then stop runs the full cycle and returns the Transcript") {
     CHECK(std::get<Transcript>(result).text == "fake transcript");
 }
 
+TEST_CASE("stop_session() passes the configured language and prompt to the Speech Backend") {
+    EventBus bus;
+    RecordingManager recording_manager(bus);
+    FakeSpeechBackend speech_backend;
+    Configuration configuration;
+    configuration.default_language = "pt";
+    configuration.transcription_prompt = "mixing English terms into Portuguese speech";
+    SessionManager manager(bus, recording_manager, speech_backend, configuration);
+
+    if (skip_if_no_device(manager.start_session())) {
+        return;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds{200});
+
+    manager.stop_session();
+
+    REQUIRE(speech_backend.last_request.has_value());
+    CHECK(speech_backend.last_request->language == "pt");
+    CHECK(speech_backend.last_request->initial_prompt ==
+         "mixing English terms into Portuguese speech");
+}
+
+TEST_CASE("a ConfigurationChanged after construction updates the language used on stop_session()") {
+    EventBus bus;
+    RecordingManager recording_manager(bus);
+    FakeSpeechBackend speech_backend;
+    SessionManager manager(bus, recording_manager, speech_backend, Configuration{});
+
+    Configuration updated;
+    updated.default_language = "es";
+    bus.publish(yoru::config::ConfigurationChanged{.configuration = updated});
+
+    if (skip_if_no_device(manager.start_session())) {
+        return;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds{200});
+
+    manager.stop_session();
+
+    REQUIRE(speech_backend.last_request.has_value());
+    CHECK(speech_backend.last_request->language == "es");
+}
+
 TEST_CASE("a transcription failure transitions to Error, and cancel_session() recovers") {
     EventBus bus;
     RecordingManager recording_manager(bus);
     FakeSpeechBackend speech_backend;
     speech_backend.should_fail = true;
-    SessionManager manager(bus, recording_manager, speech_backend);
+    SessionManager manager(bus, recording_manager, speech_backend, Configuration{});
 
     std::optional<ErrorOccurred> error_event;
     bus.subscribe<ErrorOccurred>([&](const ErrorOccurred& event) { error_event = event; });
@@ -229,7 +276,7 @@ TEST_CASE("end-to-end with a real whisper.cpp model produces a Transcript from r
                       })
                       .has_value());
 
-    SessionManager manager(bus, recording_manager, speech_backend);
+    SessionManager manager(bus, recording_manager, speech_backend, Configuration{});
 
     if (skip_if_no_device(manager.start_session())) {
         return;

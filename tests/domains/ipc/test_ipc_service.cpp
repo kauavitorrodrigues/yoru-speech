@@ -117,7 +117,8 @@ struct Fixture {
     ConfigurationManager configuration_manager{config_path, bus};
     AutoClipboard auto_clipboard{bus, configuration_manager.current()};
     FakeSpeechBackend speech_backend{bus};
-    SessionManager session_manager{bus, recording_manager, speech_backend};
+    SessionManager session_manager{bus, recording_manager, speech_backend,
+                                   configuration_manager.current()};
     IpcService service{bus, session_manager, configuration_manager, socket_path,
                        std::filesystem::temp_directory_path() /
                            "yoru-speech-test-ipc-empty-models"};

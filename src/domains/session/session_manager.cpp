@@ -1,6 +1,7 @@
 #include "domains/session/session_manager.hpp"
 
 #include "core/error_event.hpp"
+#include "domains/config/events.hpp"
 #include "domains/session/events.hpp"
 
 #include <chrono>
@@ -10,9 +11,18 @@ namespace yoru::session {
 
 SessionManager::SessionManager(core::EventBus& event_bus,
                                audio::RecordingManager& recording_manager,
-                               speech::SpeechBackend& speech_backend)
+                               speech::SpeechBackend& speech_backend,
+                               const config::Configuration& initial_configuration)
     : event_bus_(event_bus), recording_manager_(recording_manager),
-      speech_backend_(speech_backend) {}
+      speech_backend_(speech_backend),
+      default_language_(initial_configuration.default_language),
+      transcription_prompt_(initial_configuration.transcription_prompt) {
+    event_bus_.subscribe<config::ConfigurationChanged>(
+        [this](const config::ConfigurationChanged& event) {
+            default_language_ = event.configuration.default_language;
+            transcription_prompt_ = event.configuration.transcription_prompt;
+        });
+}
 
 void SessionManager::fail(const std::string& component, const std::string& message) {
     active_session_->try_transition(SessionState::Failed, std::chrono::system_clock::now());
@@ -69,8 +79,12 @@ StopSessionResult SessionManager::stop_session() {
     state_ = ServiceState::Processing;
 
     const auto& recording = std::get<audio::Recording>(recording_result);
-    auto transcription_result =
-        speech_backend_.transcribe(session_id, recording.samples, speech::TranscriptionRequest{});
+    auto transcription_result = speech_backend_.transcribe(
+        session_id, recording.samples,
+        speech::TranscriptionRequest{
+            .language = default_language_,
+            .initial_prompt = transcription_prompt_,
+        });
     if (const auto* error = std::get_if<speech::SpeechError>(&transcription_result)) {
         fail("speech", error->message);
         return SessionError{error->message};
@@ -113,6 +127,13 @@ std::optional<SessionError> SessionManager::cancel_session() {
 
 ServiceState SessionManager::state() const {
     return state_;
+}
+
+std::optional<core::SessionId> SessionManager::active_session_id() const {
+    if (!active_session_.has_value()) {
+        return std::nullopt;
+    }
+    return active_session_->id();
 }
 
 } // namespace yoru::session

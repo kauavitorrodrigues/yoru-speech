@@ -81,7 +81,8 @@ struct Fixture {
     RecordingManager recording_manager{bus};
     FakeSpeechBackend speech_backend;
     ConfigurationManager configuration_manager{config_path, bus};
-    SessionManager session_manager{bus, recording_manager, speech_backend};
+    SessionManager session_manager{bus, recording_manager, speech_backend,
+                                   configuration_manager.current()};
     CommandDispatcher dispatcher{session_manager, configuration_manager,
                                  std::filesystem::temp_directory_path() /
                                      "yoru-speech-test-empty-models-dir"};

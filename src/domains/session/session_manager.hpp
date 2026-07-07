@@ -2,6 +2,7 @@
 
 #include "core/event_bus.hpp"
 #include "domains/audio/recording_manager.hpp"
+#include "domains/config/configuration.hpp"
 #include "domains/session/service_state.hpp"
 #include "domains/session/session.hpp"
 #include "domains/speech/speech_backend.hpp"
@@ -41,8 +42,13 @@ using StopSessionResult = std::variant<speech::Transcript, SessionError>;
 // synchronously.
 class SessionManager {
 public:
+    // `initial_configuration` seeds the language/prompt passed to the
+    // Speech Backend on stop_session(); later changes are tracked via
+    // ConfigurationChanged, not by re-reading configuration (same pattern
+    // as clipboard::AutoClipboard).
     SessionManager(core::EventBus& event_bus, audio::RecordingManager& recording_manager,
-                   speech::SpeechBackend& speech_backend);
+                   speech::SpeechBackend& speech_backend,
+                   const config::Configuration& initial_configuration);
 
     SessionManager(const SessionManager&) = delete;
     SessionManager& operator=(const SessionManager&) = delete;
@@ -78,6 +84,12 @@ public:
 
     ServiceState state() const;
 
+    // The active session's id, or nullopt if the service is Idle. Exists
+    // for components that need to tag their own output with the right
+    // session (e.g. the Live Transcriber) without becoming a second
+    // authority over the session lifecycle themselves.
+    std::optional<core::SessionId> active_session_id() const;
+
 private:
     // Transitions a Recording/Processing session to Error and publishes
     // ErrorOccurred for it. Only valid to call while active_session_ has a
@@ -91,6 +103,8 @@ private:
     ServiceState state_ = ServiceState::Idle;
     std::optional<Session> active_session_;
     std::uint64_t next_session_id_ = 1;
+    std::string default_language_;
+    std::string transcription_prompt_;
 };
 
 } // namespace yoru::session
