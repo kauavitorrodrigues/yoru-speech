@@ -15,7 +15,7 @@ Yoru Speech is a background service that turns speech into text entirely on your
 ## How it works
 
 1. A client sends `start_recording` over the daemon's Unix socket.
-2. The daemon captures microphone audio until it receives `stop_recording` (or `cancel_session` to discard it).
+2. The daemon captures microphone audio until it receives `stop_recording` (or `cancel_session` to discard it). While recording, it also periodically re-transcribes what's been captured so far and pushes `transcription_partial` events to subscribed clients, so text can be shown live as the user speaks.
 3. The recording is transcribed offline by a local Whisper model.
 4. The transcript is returned to the client and, if `auto_clipboard` is enabled, copied to the clipboard automatically.
 
@@ -53,6 +53,12 @@ Transcripts are copied to the clipboard as soon as they're ready, so dictation f
 
 **Configurable model loading**
 Choose between loading the recognition model on demand (lower idle memory) or keeping it always loaded (lower per-session latency) via configuration.
+
+**Live transcription preview**
+Partial results are streamed as `transcription_partial` events while recording is still in progress, instead of only once at the end.
+
+**Mixed-language dictation**
+An optional `transcription_prompt` conditions the model with an example of the vocabulary you actually dictate (e.g. mostly-Portuguese speech with embedded English technical terms), helping it avoid collapsing mixed-language audio into a single language.
 
 **Resilient by design**
 Handles microphone disconnects, socket takeover, and filesystem errors without taking the whole service down.
