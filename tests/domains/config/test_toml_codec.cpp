@@ -47,6 +47,7 @@ TEST_CASE("encode/decode round-trips a fully populated configuration") {
     original.selected_model = "small";
     original.auto_clipboard = false;
     original.model_load_policy = ModelLoadPolicy::AlwaysLoaded;
+    original.transcription_prompt = "mixing English terms into Portuguese speech";
 
     const auto decoded = decode_toml(encode_toml(original), Configuration{});
 
@@ -55,6 +56,8 @@ TEST_CASE("encode/decode round-trips a fully populated configuration") {
     CHECK(decoded.configuration.selected_model == "small");
     CHECK(decoded.configuration.auto_clipboard == false);
     CHECK(decoded.configuration.model_load_policy == ModelLoadPolicy::AlwaysLoaded);
+    CHECK(decoded.configuration.transcription_prompt ==
+         "mixing English terms into Portuguese speech");
 }
 
 TEST_CASE("decode_toml merges missing fields with the given defaults") {

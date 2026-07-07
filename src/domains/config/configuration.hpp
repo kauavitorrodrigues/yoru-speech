@@ -21,6 +21,15 @@ struct Configuration {
     std::string selected_model = "base";
     bool auto_clipboard = true;
     ModelLoadPolicy model_load_policy = ModelLoadPolicy::OnDemand;
+    // Text passed to the Speech Backend as a conditioning hint before each
+    // transcription (whisper.cpp's `initial_prompt`), empty by default
+    // (no hint). Exists mainly to help with code-switching (e.g. mostly-
+    // Portuguese speech with embedded English technical terms): an
+    // example of the mixed vocabulary the user actually dictates biases
+    // recognition away from collapsing everything into a single
+    // language. Never required — recognition works without it, just less
+    // reliably on mixed-language audio.
+    std::string transcription_prompt;
 };
 
 } // namespace yoru::config

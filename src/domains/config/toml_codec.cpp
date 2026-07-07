@@ -77,6 +77,7 @@ std::string encode_toml(const Configuration& configuration) {
     root.insert("selected_model", configuration.selected_model);
     root.insert("auto_clipboard", configuration.auto_clipboard);
     root.insert("model_load_policy", to_string(configuration.model_load_policy));
+    root.insert("transcription_prompt", configuration.transcription_prompt);
 
     std::ostringstream out;
     out << root;
@@ -130,6 +131,14 @@ DecodedConfiguration decode_toml(const std::string& toml_source, const Configura
             }
         } else {
             errors.push_back({"model_load_policy", "expected a string"});
+        }
+    }
+
+    if (root.contains("transcription_prompt")) {
+        if (auto value = root["transcription_prompt"].value<std::string>()) {
+            configuration.transcription_prompt = *value;
+        } else {
+            errors.push_back({"transcription_prompt", "expected a string"});
         }
     }
 

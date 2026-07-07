@@ -16,7 +16,7 @@ TEST_CASE("ConfigurationChanged carries the new configuration") {
     });
 
     bus.publish(ConfigurationChanged{
-        .configuration = Configuration{.default_language = "pt"},
+        .configuration = Configuration{.default_language = "pt", .transcription_prompt = ""},
     });
 
     CHECK(received_language == "pt");
