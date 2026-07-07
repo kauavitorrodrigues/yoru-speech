@@ -5,7 +5,8 @@
 # Also depends on config, to seed and track the language/prompt passed to
 # the Speech Backend (config has no dependencies of its own, so this
 # cannot cycle either).
-add_library(yoru-domain-session service_state.cpp session.cpp session_manager.cpp)
+add_library(yoru-domain-session service_state.cpp session.cpp session_manager.cpp
+                                live_transcriber.cpp)
 
 target_include_directories(yoru-domain-session PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(

@@ -3,6 +3,7 @@ add_executable(
     test_service_state.cpp
     test_session.cpp
     test_session_manager.cpp
+    test_live_transcriber.cpp
 )
 
 target_link_libraries(
