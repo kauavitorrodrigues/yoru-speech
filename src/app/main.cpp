@@ -9,6 +9,7 @@
 #include "domains/config/events.hpp"
 #include "domains/ipc/ipc_service.hpp"
 #include "domains/session/events.hpp"
+#include "domains/session/live_transcriber.hpp"
 #include "domains/session/session_manager.hpp"
 #include "domains/speech/events.hpp"
 #include "domains/speech/model_repository.hpp"
@@ -59,6 +60,15 @@ void log_domain_events(yoru::core::EventBus& event_bus, const yoru::core::Logger
             logger.info("transcription completed (session " + session_id_str(event.session_id) +
                         ", language " + event.transcript.detected_language + ", " +
                         std::to_string(event.transcript.processing_time.count()) + "ms)");
+        });
+    // debug, not info: published on every Live Transcriber tick while a
+    // session is Recording (roughly once per second), which would
+    // otherwise flood the journal during ordinary dictation.
+    event_bus.subscribe<yoru::session::TranscriptionPartial>(
+        [&logger](const yoru::session::TranscriptionPartial& event) {
+            logger.debug("transcription partial (session " + session_id_str(event.session_id) +
+                        "): committed=\"" + event.committed_text + "\" tail=\"" +
+                        event.tail_text + "\"");
         });
     event_bus.subscribe<yoru::speech::ModelLoaded>(
         [&logger](const yoru::speech::ModelLoaded& event) {
@@ -132,7 +142,10 @@ int main() {
     load_configured_model(speech_backend, configuration_manager.current(),
                           yoru::speech::default_models_path(), logger);
 
-    yoru::session::SessionManager session_manager(event_bus, recording_manager, speech_backend);
+    yoru::session::SessionManager session_manager(event_bus, recording_manager, speech_backend,
+                                                  configuration_manager.current());
+    yoru::session::LiveTranscriber live_transcriber(event_bus, session_manager, recording_manager,
+                                                     speech_backend, configuration_manager.current());
     yoru::clipboard::AutoClipboard auto_clipboard(event_bus, configuration_manager.current());
 
     yoru::ipc::IpcService ipc_service(event_bus, session_manager, configuration_manager);
@@ -154,6 +167,7 @@ int main() {
 
     while (g_should_stop == 0) {
         ipc_service.poll_once(200);
+        live_transcriber.tick();
     }
 
     logger.info("shutting down");
