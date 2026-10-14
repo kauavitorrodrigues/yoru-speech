@@ -99,7 +99,7 @@ The install script handles all of these automatically on Arch.
 
 | Package | Source | Purpose |
 |---------|--------|---------|
-| `whisper-cpp-vulkan` | pacman | Offline speech recognition backend |
+| `whisper-cpp` | pacman | Offline speech recognition backend (ships CPU/Vulkan `ggml` backends as runtime plugins) |
 | `miniaudio` | pacman | Microphone capture |
 | `tomlplusplus` | pacman | Configuration file parsing |
 | `nlohmann-json` | pacman | IPC message encoding |
