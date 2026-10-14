@@ -10,11 +10,13 @@
 #include <doctest/doctest.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <optional>
 #include <string>
 #include <thread>
+#include <variant>
 #include <vector>
 
 using yoru::audio::RecordingManager;
@@ -57,6 +59,11 @@ public:
 
     TranscriptionResult transcribe(SessionId /*session_id*/, const std::vector<float>& /*samples*/,
                                    const TranscriptionRequest& request) override {
+        // Runs on the transcription worker thread: lets a test keep it
+        // busy to observe how the preview behaves meanwhile.
+        while (block_transcribe.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        }
         return Transcript{
             .text = "unused",
             .detected_language = "en",
@@ -86,6 +93,7 @@ public:
         };
     }
 
+    std::atomic<bool> block_transcribe{false};
     std::vector<std::string> scripted_texts;
     std::size_t next_index = 0;
     int call_count = 0;
@@ -141,6 +149,42 @@ TEST_CASE("tick() passes the configured language and prompt to the Speech Backen
     CHECK(speech_backend.last_request->language == "pt");
     CHECK(speech_backend.last_request->initial_prompt ==
          "mixing English terms into Portuguese speech");
+
+    session_manager.cancel_session();
+}
+
+TEST_CASE("tick() pauses while the transcription worker owns the backend, then resumes") {
+    EventBus bus;
+    RecordingManager recording_manager(bus);
+    ScriptedSpeechBackend speech_backend;
+    speech_backend.scripted_texts = {"hello"};
+    speech_backend.block_transcribe = true;
+    SessionManager session_manager(bus, recording_manager, speech_backend, Configuration{});
+    LiveTranscriber live_transcriber(bus, session_manager, recording_manager, speech_backend,
+                                     Configuration{}, no_force_commit_config());
+
+    // Session A is queued and stuck in transcribe().
+    if (skip_if_no_device(session_manager.start_session())) {
+        speech_backend.block_transcribe = false;
+        return;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds{200});
+    REQUIRE(std::holds_alternative<yoru::session::QueuedJob>(session_manager.stop_session()));
+
+    // Session B records meanwhile, but the preview must stay out of the
+    // backend the worker is using.
+    REQUIRE_FALSE(session_manager.start_session().has_value());
+    std::this_thread::sleep_for(std::chrono::milliseconds{500});
+    live_transcriber.tick();
+    CHECK(speech_backend.call_count == 0);
+
+    speech_backend.block_transcribe = false;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+    while (session_manager.transcription_busy() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds{2});
+    }
+    live_transcriber.tick();
+    CHECK(speech_backend.call_count == 1);
 
     session_manager.cancel_session();
 }

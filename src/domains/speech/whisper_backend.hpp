@@ -12,14 +12,18 @@ namespace yoru::speech {
 // whisper.cpp exists, so the backend can be replaced later without
 // touching callers of SpeechBackend.
 //
-// Every method must be called from a single controlling thread: the
-// underlying whisper_context is stateful and not safe for concurrent use,
-// and publishing onto EventBus is itself not thread-safe.
+// The underlying whisper_context is stateful and not safe for concurrent
+// use, so load_model(), unload_model(), transcribe() and
+// transcribe_partial() must never overlap: at any moment only one thread
+// may be inside them (session::TranscriptionQueue guarantees this by
+// running transcribe() on its single worker and pausing the live preview
+// meanwhile). request_abort() is the one method safe from any thread.
+// Publishing onto EventBus is not thread-safe, so only load_model()
+// publishes (ModelLoaded); transcribe() deliberately publishes nothing.
 class WhisperBackend : public SpeechBackend {
 public:
     // `event_bus` must outlive this backend. Publishes ModelLoaded on a
-    // successful load_model(), and TranscriptionStarted/
-    // TranscriptionCompleted/ErrorOccurred around each transcribe() call.
+    // successful load_model().
     explicit WhisperBackend(core::EventBus& event_bus);
     ~WhisperBackend() override;
 
@@ -40,11 +44,13 @@ public:
     TranscriptionResult transcribe_partial(const std::vector<float>& window,
                                            const TranscriptionRequest& request) override;
 
+    void request_abort() override;
+
 private:
     // Runs whisper_full over `samples` and builds the resulting Transcript,
-    // without publishing any event: transcribe() and transcribe_partial()
-    // each publish a different pair of events around this shared core, and
-    // must not duplicate whisper_full's setup and segment collection.
+    // without publishing any event: the shared core of transcribe() and
+    // transcribe_partial(), so neither duplicates whisper_full's setup and
+    // segment collection.
     TranscriptionResult run_whisper_full(const std::vector<float>& samples,
                                          const TranscriptionRequest& request);
 

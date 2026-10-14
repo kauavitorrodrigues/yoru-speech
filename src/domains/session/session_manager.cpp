@@ -3,6 +3,7 @@
 #include "core/error_event.hpp"
 #include "domains/config/events.hpp"
 #include "domains/session/events.hpp"
+#include "domains/speech/events.hpp"
 
 #include <chrono>
 #include <variant>
@@ -12,17 +13,20 @@ namespace yoru::session {
 SessionManager::SessionManager(core::EventBus& event_bus,
                                audio::RecordingManager& recording_manager,
                                speech::SpeechBackend& speech_backend,
-                               const config::Configuration& initial_configuration)
+                               const config::Configuration& initial_configuration,
+                               std::size_t queue_capacity)
     : event_bus_(event_bus), recording_manager_(recording_manager),
-      speech_backend_(speech_backend),
       default_language_(initial_configuration.default_language),
-      transcription_prompt_(initial_configuration.transcription_prompt) {
+      transcription_prompt_(initial_configuration.transcription_prompt),
+      queue_(speech_backend, queue_capacity) {
     event_bus_.subscribe<config::ConfigurationChanged>(
         [this](const config::ConfigurationChanged& event) {
             default_language_ = event.configuration.default_language;
             transcription_prompt_ = event.configuration.transcription_prompt;
         });
 }
+
+SessionManager::~SessionManager() = default;
 
 void SessionManager::fail(const std::string& component, const std::string& message) {
     active_session_->try_transition(SessionState::Failed, std::chrono::system_clock::now());
@@ -39,6 +43,15 @@ void SessionManager::fail(const std::string& component, const std::string& messa
 std::optional<SessionError> SessionManager::start_session() {
     if (state_ != ServiceState::Idle) {
         return SessionError{"a session is already active"};
+    }
+    if (!queue_.has_capacity()) {
+        const std::string message = "transcription queue is full";
+        event_bus_.publish(core::ErrorOccurred{
+            .session_id = std::nullopt,
+            .component = "queue",
+            .message = message,
+        });
+        return SessionError{message};
     }
 
     const auto session_id = core::SessionId{next_session_id_++};
@@ -76,24 +89,47 @@ StopSessionResult SessionManager::stop_session() {
     }
 
     active_session_->try_transition(SessionState::Processing, std::chrono::system_clock::now());
-    state_ = ServiceState::Processing;
 
-    const auto& recording = std::get<audio::Recording>(recording_result);
-    auto transcription_result = speech_backend_.transcribe(
-        session_id, recording.samples,
-        speech::TranscriptionRequest{
-            .language = default_language_,
-            .initial_prompt = transcription_prompt_,
-        });
-    if (const auto* error = std::get_if<speech::SpeechError>(&transcription_result)) {
-        fail("speech", error->message);
-        return SessionError{error->message};
+    auto& recording = std::get<audio::Recording>(recording_result);
+    const auto position = queue_.try_enqueue(TranscriptionJob{
+        .session_id = session_id,
+        .samples = std::move(recording.samples),
+        .request =
+            speech::TranscriptionRequest{
+                .language = default_language_,
+                .initial_prompt = transcription_prompt_,
+            },
+    });
+    if (!position.has_value()) {
+        fail("queue", "transcription queue is full or shutting down");
+        return SessionError{"transcription queue is full or shutting down"};
     }
 
-    active_session_->try_transition(SessionState::Completed, std::chrono::system_clock::now());
+    // The Session object covers the recording only; from here the job is
+    // tracked by the queue, and the next session can start immediately.
     active_session_.reset();
     state_ = ServiceState::Idle;
-    return std::get<speech::Transcript>(std::move(transcription_result));
+    event_bus_.publish(speech::TranscriptionStarted{session_id});
+    return QueuedJob{.session_id = session_id, .position = *position};
+}
+
+std::size_t SessionManager::poll_completed() {
+    auto results = queue_.drain_completed();
+    for (auto& job : results) {
+        if (const auto* error = std::get_if<speech::SpeechError>(&job.result)) {
+            last_failed_ = job.session_id;
+            event_bus_.publish(core::ErrorOccurred{
+                .session_id = job.session_id,
+                .component = "speech",
+                .message = error->message,
+            });
+            continue;
+        }
+        last_completed_ = job.session_id;
+        event_bus_.publish(speech::TranscriptionCompleted{
+            job.session_id, std::get<speech::Transcript>(std::move(job.result))});
+    }
+    return results.size();
 }
 
 std::optional<SessionError> SessionManager::cancel_session() {
@@ -101,11 +137,6 @@ std::optional<SessionError> SessionManager::cancel_session() {
         return SessionError{"no session to cancel"};
     }
 
-    // Processing only ever exists transiently within stop_session()'s own
-    // call, since transcribe() is synchronous: an external caller can never
-    // actually observe and cancel it mid-flight in this architecture. This
-    // branch exists for the state machine's sake, not because it's
-    // reachable today; revisit if transcription ever becomes asynchronous.
     if (state_ == ServiceState::Recording) {
         recording_manager_.stop();
     }
@@ -125,8 +156,37 @@ std::optional<SessionError> SessionManager::cancel_session() {
     return std::nullopt;
 }
 
+bool SessionManager::cancel_job(core::SessionId session_id) {
+    if (!queue_.cancel_pending(session_id)) {
+        return false;
+    }
+    event_bus_.publish(SessionCancelled{session_id});
+    return true;
+}
+
+std::size_t SessionManager::shutdown() {
+    return queue_.shutdown();
+}
+
 ServiceState SessionManager::state() const {
-    return state_;
+    if (state_ != ServiceState::Idle) {
+        return state_;
+    }
+    return queue_.outstanding_count() > 0 ? ServiceState::Processing : ServiceState::Idle;
+}
+
+SessionStatus SessionManager::status() const {
+    return SessionStatus{
+        .state = state(),
+        .queued = queue_.pending_count(),
+        .processing = queue_.is_busy(),
+        .last_completed = last_completed_,
+        .last_failed = last_failed_,
+    };
+}
+
+bool SessionManager::transcription_busy() const {
+    return queue_.outstanding_count() > 0;
 }
 
 std::optional<core::SessionId> SessionManager::active_session_id() const {

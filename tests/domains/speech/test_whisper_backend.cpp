@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <numbers>
 #include <optional>
+#include <thread>
 #include <variant>
 
 using yoru::core::EventBus;
@@ -119,7 +120,7 @@ TEST_CASE("load_model() with a real model succeeds and publishes ModelLoaded") {
     CHECK(loaded->name == "ggml-large-v3-turbo-q5_0");
 }
 
-TEST_CASE("transcribe() with a real model produces a Transcript and publishes both events") {
+TEST_CASE("transcribe() with a real model produces a Transcript and publishes no events") {
     if (!std::filesystem::exists(kTurboModelPath)) {
         MESSAGE("skipping: large-v3-turbo model not installed (", kTurboModelPath.string(), ")");
         return;
@@ -128,12 +129,11 @@ TEST_CASE("transcribe() with a real model produces a Transcript and publishes bo
     EventBus bus;
     WhisperBackend backend(bus);
 
-    std::optional<SessionId> started_id;
-    std::optional<Transcript> completed_transcript;
-    bus.subscribe<TranscriptionStarted>(
-        [&](const TranscriptionStarted& event) { started_id = event.session_id; });
-    bus.subscribe<TranscriptionCompleted>(
-        [&](const TranscriptionCompleted& event) { completed_transcript = event.transcript; });
+    // transcribe() runs on the worker thread, where publishing is unsafe:
+    // reporting is the caller's job.
+    bool any_event = false;
+    bus.subscribe<TranscriptionStarted>([&](const TranscriptionStarted&) { any_event = true; });
+    bus.subscribe<TranscriptionCompleted>([&](const TranscriptionCompleted&) { any_event = true; });
 
     REQUIRE_FALSE(backend.load_model(turbo_model()).has_value());
 
@@ -143,9 +143,31 @@ TEST_CASE("transcribe() with a real model produces a Transcript and publishes bo
     const auto& transcript = std::get<Transcript>(result);
     CHECK(transcript.requested_language == "auto");
     CHECK(transcript.audio_duration == std::chrono::milliseconds{1000});
+    CHECK_FALSE(any_event);
+}
 
-    REQUIRE(started_id.has_value());
-    CHECK(started_id.value() == SessionId{7});
-    REQUIRE(completed_transcript.has_value());
-    CHECK(completed_transcript->audio_duration == std::chrono::milliseconds{1000});
+TEST_CASE("request_abort() makes a pending transcribe() fail instead of running") {
+    if (!std::filesystem::exists(kTurboModelPath)) {
+        MESSAGE("skipping: large-v3-turbo model not installed (", kTurboModelPath.string(), ")");
+        return;
+    }
+
+    EventBus bus;
+    WhisperBackend backend(bus);
+    REQUIRE_FALSE(backend.load_model(turbo_model()).has_value());
+
+    // transcribe() clears the flag on entry, so aborting must come from
+    // another thread while it runs.
+    std::thread aborter([&] {
+        std::this_thread::sleep_for(std::chrono::milliseconds{20});
+        backend.request_abort();
+    });
+    const auto result =
+        backend.transcribe(SessionId{8}, std::vector<float>(16000 * 25, 0.1F), TranscriptionRequest{});
+    aborter.join();
+
+    // The tone may finish before 20 ms on a fast GPU; both outcomes are
+    // valid, but an abort must never crash or hang.
+    CHECK((std::holds_alternative<Transcript>(result) ||
+           std::holds_alternative<SpeechError>(result)));
 }

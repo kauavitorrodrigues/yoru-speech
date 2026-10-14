@@ -53,7 +53,7 @@ void log_domain_events(yoru::core::EventBus& event_bus, const yoru::core::Logger
         });
     event_bus.subscribe<yoru::speech::TranscriptionStarted>(
         [&logger](const yoru::speech::TranscriptionStarted& event) {
-            logger.info("transcription started (session " + session_id_str(event.session_id) + ")");
+            logger.info("transcription queued (session " + session_id_str(event.session_id) + ")");
         });
     event_bus.subscribe<yoru::speech::TranscriptionCompleted>(
         [&logger](const yoru::speech::TranscriptionCompleted& event) {
@@ -166,14 +166,25 @@ int main() {
     std::signal(SIGPIPE, SIG_IGN);
 
     while (g_should_stop == 0) {
-        ipc_service.poll_once(200);
+        // While the transcription worker has jobs, wake up often enough
+        // that a finished one reaches clients and the clipboard promptly;
+        // otherwise sleep as long as IPC allows.
+        ipc_service.poll_once(session_manager.transcription_busy() ? 20 : 200);
+        session_manager.poll_completed();
         live_transcriber.tick();
     }
 
     logger.info("shutting down");
-    if (session_manager.state() != yoru::session::ServiceState::Idle) {
-        session_manager.cancel_session();
+    // cancel_session() only concerns a recording in progress (or a
+    // failure to acknowledge); queued transcriptions are handled by
+    // shutdown(), which must also run before the speech backend is
+    // destroyed since the worker thread calls into it.
+    session_manager.cancel_session();
+    if (const auto dropped = session_manager.shutdown(); dropped > 0) {
+        logger.warn("dropped " + std::to_string(dropped) +
+                    " queued transcription(s) at shutdown");
     }
+    session_manager.poll_completed();
     ipc_service.stop();
 
     return 0;

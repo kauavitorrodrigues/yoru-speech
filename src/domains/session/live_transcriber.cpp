@@ -173,6 +173,12 @@ void LiveTranscriber::tick() {
     if (session_manager_.state() != ServiceState::Recording) {
         return;
     }
+    // The transcription worker owns the speech backend while it has work;
+    // the whisper context is not safe for two callers, so the preview
+    // simply pauses (and resumes by itself once the queue is empty).
+    if (session_manager_.transcription_busy()) {
+        return;
+    }
 
     const auto session_id = session_manager_.active_session_id();
     if (!session_id.has_value()) {
