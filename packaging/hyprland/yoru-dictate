@@ -3,7 +3,16 @@
 over the daemon's IPC socket. `toggle` picks start or stop based on a local
 marker file, so a single key bind works even on compositors whose release
 event ("bindr" and equivalents) isn't delivered reliably; `start`/`stop` remain
-for compositors where a press/release bind does work."""
+for compositors where a press/release bind does work.
+
+stop_recording is acknowledged as soon as the audio is queued for
+transcription; the text arrives later as a transcription_completed event.
+So a stop waits on a second, event-subscribed connection (opened before the
+stop is sent, so the event can't be missed) and notifies when the session it
+queued finishes. The daemon also copies the text to the clipboard on its own,
+so this only affects the notification. Several stops in a row each get their
+own waiter, which is what lets a new dictation start while an earlier one is
+still being transcribed."""
 import json
 import os
 import shutil
@@ -18,6 +27,11 @@ import time
 # that overwrites the clipboard. Below this threshold, stop cancels the
 # session instead of asking for a transcript.
 MIN_HOLD_SECONDS = 0.15
+
+# How long a stop waits for its transcript before giving up on the
+# notification (the text still reaches the clipboard). Generous: a slow
+# model plus a queue of earlier dictations can take a while.
+TRANSCRIPT_TIMEOUT_SECONDS = 300
 
 
 def socket_path():
@@ -38,6 +52,51 @@ def send(command):
     data = sock.recv(65536)
     sock.close()
     return json.loads(data.decode())
+
+
+def read_line(sock, buffer):
+    """Reads one newline-terminated line, keeping surplus bytes in `buffer`."""
+    while b"\n" not in buffer:
+        chunk = sock.recv(65536)
+        if not chunk:
+            raise ConnectionError("daemon closed the connection")
+        buffer += chunk
+    line, _, rest = buffer.partition(b"\n")
+    buffer.clear()
+    buffer.extend(rest)
+    return json.loads(line.decode())
+
+
+def open_event_listener():
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(5)
+    sock.connect(socket_path())
+    sock.send(b'{"type":"subscribe_events"}\n')
+    buffer = bytearray()
+    read_line(sock, buffer)  # the subscribe_events ack
+    return sock, buffer
+
+
+def wait_for_transcript(sock, buffer, session_id):
+    """Blocks until `session_id` completes or fails; returns (text, error)."""
+    deadline = time.monotonic() + TRANSCRIPT_TIMEOUT_SECONDS
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None, "timed out waiting for the transcript"
+        sock.settimeout(remaining)
+        try:
+            event = read_line(sock, buffer)
+        except socket.timeout:
+            return None, "timed out waiting for the transcript"
+        if event.get("type") != "event" or event.get("session_id") != session_id:
+            continue
+        if event.get("event") == "transcription_completed":
+            return event.get("text", ""), None
+        if event.get("event") == "error_occurred":
+            return None, event.get("message", "unknown error")
+        if event.get("event") == "session_cancelled":
+            return None, "cancelled"
 
 
 def notify(title, message):
@@ -68,11 +127,22 @@ def do_stop(check_min_hold):
         send({"type": "cancel_session"})
         return
 
-    response = send({"type": "stop_recording"})
-    if response.get("ok", False):
-        notify("Yoru Speech", response.get("text", "").strip() or "(no speech detected)")
+    # Subscribe first: the transcript can be ready before we'd otherwise
+    # have connected, and events aren't replayed.
+    events, buffer = open_event_listener()
+    try:
+        response = send({"type": "stop_recording"})
+        if not response.get("ok", False):
+            notify("Yoru Speech", "error: " + response.get("error", "unknown error"))
+            return
+        text, error = wait_for_transcript(events, buffer, response.get("session_id"))
+    finally:
+        events.close()
+
+    if error is not None:
+        notify("Yoru Speech", "error: " + error)
     else:
-        notify("Yoru Speech", "error: " + response.get("error", "unknown error"))
+        notify("Yoru Speech", text.strip() or "(no speech detected)")
 
 
 def main():

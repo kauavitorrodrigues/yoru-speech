@@ -16,8 +16,8 @@ Yoru Speech is a background service that turns speech into text entirely on your
 
 1. A client sends `start_recording` over the daemon's Unix socket.
 2. The daemon captures microphone audio until it receives `stop_recording` (or `cancel_session` to discard it). While recording, it also periodically re-transcribes what's been captured so far and pushes `transcription_partial` events to subscribed clients, so text can be shown live as the user speaks.
-3. The recording is transcribed offline by a local Whisper model.
-4. The transcript is returned to the client and, if `auto_clipboard` is enabled, copied to the clipboard automatically.
+3. `stop_recording` is acknowledged as soon as the audio is queued. A background worker transcribes queued recordings one at a time, in order, with a local Whisper model, so you can start the next dictation without waiting.
+4. Each transcript is pushed to subscribed clients as a `transcription_completed` event and, if `auto_clipboard` is enabled, copied to the clipboard automatically. Results are delivered in the order the recordings were stopped.
 
 ## Repository Structure
 
@@ -46,7 +46,10 @@ yoru-speech/
 Speech recognition runs locally via whisper.cpp. No audio or text ever leaves the machine.
 
 **IPC-driven, client-agnostic**
-Any process that can open a Unix socket can drive the daemon: `start_recording`, `stop_recording`, `cancel_session`, `get_config`, `set_config`. The bundled `yoru-dictate` script is one such client, built for Hyprland keybinds.
+Any process that can open a Unix socket can drive the daemon: `start_recording`, `stop_recording`, `cancel_session`, `cancel_job`, `get_state`, `get_config`, `set_config`. The bundled `yoru-dictate` script is one such client, built for Hyprland keybinds.
+
+**Asynchronous transcription queue**
+Recording never waits for transcription. `stop_recording` returns `{"ok":true,"session_id":N,"position":K}` immediately and the text follows as a `transcription_completed` event carrying the same `session_id`. Up to 8 recordings can wait in a FIFO queue; when it is full, `start_recording` is rejected with `transcription queue is full` instead of recording audio that couldn't be kept. `get_state` reports `state`, `queued`, `processing`, `last_completed` and `last_failed`, and `cancel_job` (with a `session_id`) removes a job that hasn't started yet. The live preview pauses while the queue is busy.
 
 **Automatic clipboard**
 Transcripts are copied to the clipboard as soon as they're ready, so dictation fits into any text field without extra steps.
