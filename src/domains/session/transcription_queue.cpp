@@ -51,6 +51,22 @@ std::vector<TranscriptionJobResult> TranscriptionQueue::drain_completed() {
     return std::exchange(completed_, {});
 }
 
+void TranscriptionQueue::set_activity_callback(std::function<void()> callback) {
+    std::lock_guard lock(mutex_);
+    on_activity_ = std::move(callback);
+}
+
+void TranscriptionQueue::notify_activity() {
+    std::function<void()> callback;
+    {
+        std::lock_guard lock(mutex_);
+        callback = on_activity_;
+    }
+    if (callback) {
+        callback();
+    }
+}
+
 QueueSnapshot TranscriptionQueue::snapshot() const {
     std::lock_guard lock(mutex_);
     return QueueSnapshot{.pending = pending_.size(), .busy = busy_};
@@ -102,6 +118,7 @@ void TranscriptionQueue::run() {
             busy_ = true;
             started_.push_back(job.session_id);
         }
+        notify_activity();
 
         auto result = backend_.transcribe(job.session_id, job.samples, job.request);
 
@@ -110,6 +127,7 @@ void TranscriptionQueue::run() {
             busy_ = false;
             completed_.push_back({job.session_id, std::move(result)});
         }
+        notify_activity();
     }
 }
 

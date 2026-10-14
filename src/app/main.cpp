@@ -174,11 +174,13 @@ int main() {
     // ordinary error value once the signal itself can't terminate us.
     std::signal(SIGPIPE, SIG_IGN);
 
+    // The worker thread rings this whenever a transcription starts or
+    // finishes, which cuts the poll below short so the result reaches
+    // clients and the clipboard right away instead of at the next timeout.
+    session_manager.set_activity_callback([&ipc_service] { ipc_service.wake(); });
+
     while (g_should_stop == 0) {
-        // While the transcription worker has jobs, wake up often enough
-        // that a finished one reaches clients and the clipboard promptly;
-        // otherwise sleep as long as IPC allows.
-        ipc_service.poll_once(session_manager.transcription_busy() ? 20 : 200);
+        ipc_service.poll_once(200);
         session_manager.poll_completed();
         live_transcriber.tick();
     }
@@ -192,7 +194,10 @@ int main() {
     // Each dropped job is also reported individually (with its session id)
     // as an ErrorOccurred, which the subscribers above log and forward to
     // IPC clients.
-    if (const auto dropped = session_manager.shutdown(); !dropped.empty()) {
+    const auto dropped = session_manager.shutdown();
+    // The worker is joined, so nothing can call into ipc_service anymore.
+    session_manager.set_activity_callback({});
+    if (!dropped.empty()) {
         logger.warn("dropped " + std::to_string(dropped.size()) +
                     " queued transcription(s) at shutdown");
     }

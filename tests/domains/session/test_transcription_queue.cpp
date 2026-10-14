@@ -386,3 +386,40 @@ TEST_CASE("snapshot reads pending and busy together") {
     CHECK(snapshot.busy);
     backend.open();
 }
+
+TEST_CASE("the activity callback rings when a job starts and when it finishes") {
+    GatedSpeechBackend backend;
+    std::atomic<int> rings{0};
+    TranscriptionQueue queue(backend);
+    queue.set_activity_callback([&] { ++rings; });
+
+    REQUIRE(queue.try_enqueue(make_job(1)).has_value());
+    REQUIRE(backend.wait_started(1));
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (rings.load() < 1 && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(1ms);
+    }
+    CHECK(rings.load() == 1); // started, still running
+
+    backend.open();
+    REQUIRE(collect(queue, 1).size() == 1);
+    while (rings.load() < 2 && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(1ms);
+    }
+    CHECK(rings.load() == 2); // finished
+}
+
+TEST_CASE("the activity callback never runs after shutdown() returns") {
+    GatedSpeechBackend backend;
+    std::atomic<int> rings{0};
+    TranscriptionQueue queue(backend);
+    queue.set_activity_callback([&] { ++rings; });
+
+    REQUIRE(queue.try_enqueue(make_job(1)).has_value());
+    REQUIRE(backend.wait_started(1));
+    queue.shutdown();
+
+    const int after_shutdown = rings.load();
+    std::this_thread::sleep_for(20ms);
+    CHECK(rings.load() == after_shutdown);
+}

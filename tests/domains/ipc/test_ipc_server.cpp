@@ -4,10 +4,12 @@
 
 #include <doctest/doctest.h>
 
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 using yoru::ipc::IpcServer;
@@ -305,4 +307,46 @@ TEST_CASE("send_line() disconnects a client that isn't reading fast enough") {
     CHECK(disconnected_id.value() == connected_id.value());
 
     server.stop();
+}
+
+TEST_CASE("wake() from another thread cuts a long poll_once() short") {
+    const auto path = unique_test_socket_path();
+    std::filesystem::remove(path);
+    IpcServer server(path);
+    REQUIRE_FALSE(server.start().has_value());
+
+    std::thread waker([&] {
+        std::this_thread::sleep_for(std::chrono::milliseconds{50});
+        server.wake();
+    });
+
+    const auto started = std::chrono::steady_clock::now();
+    server.poll_once(10000, [](IpcServer::ClientId, const std::string&) {},
+                     [](IpcServer::ClientId) {});
+    const auto waited = std::chrono::steady_clock::now() - started;
+    waker.join();
+
+    CHECK(waited < std::chrono::seconds{5});
+
+    // The wake was consumed: with nothing else pending, the next poll
+    // sleeps out its (short) timeout instead of returning at once forever.
+    const auto second_started = std::chrono::steady_clock::now();
+    server.poll_once(100, [](IpcServer::ClientId, const std::string&) {},
+                     [](IpcServer::ClientId) {});
+    CHECK(std::chrono::steady_clock::now() - second_started >= std::chrono::milliseconds{80});
+
+    server.stop();
+}
+
+TEST_CASE("wake() before start() and after stop() is a harmless no-op") {
+    const auto path = unique_test_socket_path();
+    std::filesystem::remove(path);
+    IpcServer server(path);
+
+    server.wake();
+    REQUIRE_FALSE(server.start().has_value());
+    server.stop();
+    server.wake();
+
+    CHECK_FALSE(server.is_running());
 }

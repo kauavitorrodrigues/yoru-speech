@@ -21,7 +21,7 @@ namespace yoru::ipc {
 // event subscription.
 //
 // Single-threaded, like every class it wires together: every method
-// must be called from one controlling thread.
+// must be called from one controlling thread, except wake().
 class IpcService {
 public:
     // `event_bus`, `session_manager`, and `configuration_manager` must
@@ -50,6 +50,10 @@ public:
     // forgets a client's event subscription when it disconnects. Meant
     // to be called repeatedly from the composition root's run loop.
     void poll_once(int timeout_ms);
+
+    // Makes a waiting poll_once() return right away. Safe from any thread;
+    // see IpcServer::wake().
+    void wake();
 
 private:
     IpcServer server_;

@@ -7,6 +7,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <deque>
+#include <functional>
 #include <mutex>
 #include <optional>
 #include <thread>
@@ -87,6 +88,14 @@ public:
     // Takes all results completed since the last call, in processing order.
     std::vector<TranscriptionJobResult> drain_completed();
 
+    // Registers a callback the worker invokes (from the worker thread, not
+    // holding any queue lock) each time it starts or finishes a job, so the
+    // owner can wake its own loop to call drain_started()/drain_completed()
+    // instead of polling. It must be fast and thread-safe, and must not call
+    // back into the queue. Pass an empty function to unregister; after
+    // shutdown() returns the callback is guaranteed not to run again.
+    void set_activity_callback(std::function<void()> callback);
+
     // Jobs waiting and whether one is being processed, read atomically.
     QueueSnapshot snapshot() const;
 
@@ -101,6 +110,7 @@ public:
 
 private:
     void run();
+    void notify_activity();
 
     speech::SpeechBackend& backend_;
     const std::size_t capacity_;
@@ -112,6 +122,7 @@ private:
     std::vector<TranscriptionJobResult> completed_;
     bool busy_ = false;
     bool stopping_ = false;
+    std::function<void()> on_activity_;
 
     std::thread worker_;
 };

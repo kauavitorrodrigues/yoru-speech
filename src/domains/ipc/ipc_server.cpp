@@ -2,13 +2,16 @@
 
 #include <fcntl.h>
 #include <poll.h>
+#include <sys/eventfd.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cerrno>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <unordered_map>
@@ -85,6 +88,10 @@ std::filesystem::path default_socket_path() {
 struct IpcServer::Impl {
     std::filesystem::path socket_path;
     int listen_fd = -1;
+    // eventfd that wake() writes to and poll_once() also waits on. Atomic
+    // because wake() reads it from other threads while start()/stop() own
+    // its lifetime.
+    std::atomic<int> wake_fd{-1};
     // Also the registry of currently-connected client fds: a client is
     // "known" exactly while it has an entry here, from accept() to
     // disconnect.
@@ -158,7 +165,16 @@ std::optional<IpcError> IpcServer::start() {
     // on this single-threaded server.
     set_nonblocking(fd);
 
+    const int wake_fd = ::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    if (wake_fd == -1) {
+        const auto error = errno_message("failed to create wake eventfd");
+        ::close(fd);
+        ::unlink(path_string.c_str());
+        return IpcError{error};
+    }
+
     impl_->listen_fd = fd;
+    impl_->wake_fd.store(wake_fd);
     return std::nullopt;
 }
 
@@ -176,6 +192,25 @@ void IpcServer::stop() {
     ::close(impl_->listen_fd);
     impl_->listen_fd = -1;
     ::unlink(impl_->socket_path.string().c_str());
+
+    // Unpublished before closing, so a wake() racing the shutdown sees -1
+    // rather than a closed (and soon reusable) descriptor.
+    const int wake_fd = impl_->wake_fd.exchange(-1);
+    if (wake_fd != -1) {
+        ::close(wake_fd);
+    }
+}
+
+void IpcServer::wake() {
+    const int wake_fd = impl_->wake_fd.load();
+    if (wake_fd == -1) {
+        return;
+    }
+    const std::uint64_t one = 1;
+    // Best effort: the counter saturating or a signal interrupting the
+    // write both still leave the eventfd readable or the caller about to
+    // poll anyway, so the result carries nothing to act on.
+    [[maybe_unused]] const auto written = ::write(wake_fd, &one, sizeof(one));
 }
 
 void IpcServer::poll_once(int timeout_ms, const LineCallback& on_line,
@@ -196,12 +231,20 @@ void IpcServer::poll_once(int timeout_ms, const LineCallback& on_line,
 
     std::vector<pollfd> fds;
     fds.push_back(pollfd{impl_->listen_fd, POLLIN, 0});
+    fds.push_back(pollfd{impl_->wake_fd.load(), POLLIN, 0});
     for (const auto& entry : impl_->read_buffers) {
         fds.push_back(pollfd{entry.first, POLLIN, 0});
     }
 
     if (::poll(fds.data(), fds.size(), timeout_ms) <= 0) {
         return;
+    }
+
+    if ((fds[1].revents & POLLIN) != 0) {
+        // Drain the counter so the next poll() sleeps again; the woken
+        // caller has nothing to read here, it just got control back.
+        std::uint64_t ignored = 0;
+        [[maybe_unused]] const auto drained = ::read(fds[1].fd, &ignored, sizeof(ignored));
     }
 
     if ((fds[0].revents & POLLIN) != 0) {
@@ -229,7 +272,7 @@ void IpcServer::poll_once(int timeout_ms, const LineCallback& on_line,
 
     std::vector<int> disconnected;
     std::array<char, kReadChunkSize> chunk{};
-    for (std::size_t i = 1; i < fds.size(); ++i) {
+    for (std::size_t i = 2; i < fds.size(); ++i) {
         if ((fds[i].revents & (POLLIN | POLLHUP | POLLERR)) == 0) {
             continue;
         }

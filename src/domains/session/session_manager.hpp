@@ -11,6 +11,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <variant>
@@ -122,6 +123,13 @@ public:
     // Derived from capture and queue activity: Recording or Error while
     // capture says so, otherwise Processing if any job is queued or being
     // transcribed, otherwise Idle.
+    // Registers a callback the transcription worker invokes, from its own
+    // thread, whenever a job starts or finishes: the cue to call
+    // poll_completed() soon. Typically wakes the owner's event loop. Must be
+    // fast and thread-safe. Pass an empty function to unregister before
+    // destroying whatever the callback refers to.
+    void set_activity_callback(std::function<void()> callback);
+
     ServiceState state() const;
 
     SessionStatus status() const;

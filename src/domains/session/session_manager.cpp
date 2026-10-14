@@ -175,6 +175,10 @@ bool SessionManager::cancel_job(core::SessionId session_id) {
     return true;
 }
 
+void SessionManager::set_activity_callback(std::function<void()> callback) {
+    queue_.set_activity_callback(std::move(callback));
+}
+
 std::vector<core::SessionId> SessionManager::shutdown() {
     auto dropped = queue_.shutdown();
     for (const core::SessionId id : dropped) {
