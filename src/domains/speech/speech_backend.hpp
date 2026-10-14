@@ -71,6 +71,13 @@ public:
     // transcribe() does: empty `window` or no model loaded.
     virtual TranscriptionResult transcribe_partial(const std::vector<float>& window,
                                                    const TranscriptionRequest& request) = 0;
+
+    // Asks a transcribe() running on another thread to stop early; it then
+    // returns a SpeechError. Safe to call from any thread. Used only at
+    // shutdown, so the owner does not wait for a long transcription to
+    // finish. The default does nothing: backends that cannot be
+    // interrupted simply run to completion.
+    virtual void request_abort() {}
 };
 
 } // namespace yoru::speech
