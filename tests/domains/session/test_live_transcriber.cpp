@@ -73,9 +73,16 @@ public:
         };
     }
 
-    TranscriptionResult transcribe_partial(const std::vector<float>& /*window*/,
+    // So a test that fails while the worker is blocked cannot hang the
+    // destructor, which joins it.
+    void request_abort() override {
+        block_transcribe = false;
+    }
+
+    TranscriptionResult transcribe_partial(const std::vector<float>& window,
                                            const TranscriptionRequest& request) override {
         ++call_count;
+        last_window_size = window.size();
         last_request = request;
         const std::string text =
             scripted_texts.empty()
@@ -97,6 +104,7 @@ public:
     std::vector<std::string> scripted_texts;
     std::size_t next_index = 0;
     int call_count = 0;
+    std::size_t last_window_size = 0;
     std::optional<TranscriptionRequest> last_request;
 };
 
@@ -186,6 +194,45 @@ TEST_CASE("tick() pauses while the transcription worker owns the backend, then r
     live_transcriber.tick();
     CHECK(speech_backend.call_count == 1);
 
+    session_manager.cancel_session();
+}
+
+TEST_CASE("after a long pause tick() caps the window instead of re-decoding everything") {
+    EventBus bus;
+    RecordingManager recording_manager(bus);
+    ScriptedSpeechBackend speech_backend;
+    speech_backend.scripted_texts = {"hello"};
+    speech_backend.block_transcribe = true;
+    SessionManager session_manager(bus, recording_manager, speech_backend, Configuration{});
+    auto config = no_force_commit_config();
+    config.max_segment_duration = std::chrono::milliseconds{200};
+    LiveTranscriber live_transcriber(bus, session_manager, recording_manager, speech_backend,
+                                     Configuration{}, config);
+
+    if (skip_if_no_device(session_manager.start_session())) {
+        speech_backend.block_transcribe = false;
+        return;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds{100});
+    REQUIRE(std::holds_alternative<yoru::session::QueuedJob>(session_manager.stop_session()));
+    REQUIRE_FALSE(session_manager.start_session().has_value());
+
+    // ~1.2 s of audio piles up while the preview is paused.
+    std::this_thread::sleep_for(std::chrono::milliseconds{1200});
+    live_transcriber.tick(); // the main loop keeps ticking; this one is skipped
+    CHECK(speech_backend.call_count == 0);
+    speech_backend.block_transcribe = false;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+    while (session_manager.transcription_busy() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds{2});
+    }
+
+    live_transcriber.tick();
+
+    REQUIRE(speech_backend.call_count == 1);
+    // 200 ms is 3200 samples; allow for audio that arrived meanwhile, but
+    // it must be nowhere near the ~19200 samples that had accumulated.
+    CHECK(speech_backend.last_window_size <= 3200 + 3200);
     session_manager.cancel_session();
 }
 

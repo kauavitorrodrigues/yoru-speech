@@ -8,6 +8,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <variant>
 #include <vector>
 
 namespace {
@@ -63,6 +64,17 @@ public:
         gate_cv_.notify_all();
     }
 
+    void clear_abort() override {
+        std::lock_guard lock(mutex_);
+        aborted_ = false;
+        ++clear_abort_calls_;
+    }
+
+    std::size_t clear_abort_calls() {
+        std::lock_guard lock(mutex_);
+        return clear_abort_calls_;
+    }
+
     // Lets every current and future transcribe() finish.
     void open() {
         std::lock_guard lock(mutex_);
@@ -103,6 +115,7 @@ private:
     bool open_once_ = false;
     bool aborted_ = false;
     bool fail_ = false;
+    std::size_t clear_abort_calls_ = 0;
 };
 
 TranscriptionJob make_job(std::uint64_t id) {
@@ -150,12 +163,12 @@ TEST_CASE("a job can be enqueued while another is being transcribed") {
 
     REQUIRE(queue.try_enqueue(make_job(1)).has_value());
     REQUIRE(backend.wait_started(1));
-    CHECK(queue.is_busy());
+    CHECK(queue.snapshot().busy);
 
     const auto position = queue.try_enqueue(make_job(2));
     REQUIRE(position.has_value());
     CHECK(*position == 1);
-    CHECK(queue.pending_count() == 1);
+    CHECK(queue.snapshot().pending == 1);
     CHECK(queue.outstanding_count() == 2);
 
     backend.open();
@@ -249,10 +262,13 @@ TEST_CASE("shutdown drops waiting jobs, aborts the one in progress and joins the
     REQUIRE(queue.try_enqueue(make_job(2)).has_value());
     REQUIRE(queue.try_enqueue(make_job(3)).has_value());
 
-    CHECK(queue.shutdown() == 2);
+    const auto dropped = queue.shutdown();
+    REQUIRE(dropped.size() == 2);
+    CHECK(dropped[0] == static_cast<SessionId>(2));
+    CHECK(dropped[1] == static_cast<SessionId>(3));
 
-    CHECK_FALSE(queue.is_busy());
-    CHECK(queue.pending_count() == 0);
+    CHECK_FALSE(queue.snapshot().busy);
+    CHECK(queue.snapshot().pending == 0);
     // Only the aborted job produced a result; the dropped ones never ran.
     const auto results = queue.drain_completed();
     REQUIRE(results.size() == 1);
@@ -269,7 +285,7 @@ TEST_CASE("after shutdown the queue accepts no jobs and shutdown is idempotent")
 
     CHECK_FALSE(queue.has_capacity());
     CHECK_FALSE(queue.try_enqueue(make_job(1)).has_value());
-    CHECK(queue.shutdown() == 0);
+    CHECK(queue.shutdown().empty());
 }
 
 TEST_CASE("destroying a queue with work in flight does not hang") {
@@ -294,8 +310,79 @@ TEST_CASE("release_one lets jobs finish one at a time") {
     backend.release_one();
     REQUIRE(collect(queue, 1).size() == 1);
     REQUIRE(backend.wait_started(2));
-    CHECK(queue.is_busy());
+    CHECK(queue.snapshot().busy);
 
     backend.open();
     CHECK(collect(queue, 1).size() == 1);
+}
+
+TEST_CASE("the queue clears a stale abort before each job, never transcribe() itself") {
+    GatedSpeechBackend backend;
+    backend.request_abort(); // left over from some earlier shutdown request
+    backend.open();
+    TranscriptionQueue queue(backend);
+
+    REQUIRE(queue.try_enqueue(make_job(1)).has_value());
+    REQUIRE(queue.try_enqueue(make_job(2)).has_value());
+
+    const auto results = collect(queue, 2);
+    REQUIRE(results.size() == 2);
+    // Neither job was poisoned by the stale abort, and the queue (not the
+    // backend) did the clearing, once per job.
+    for (const auto& r : results) {
+        CHECK(std::holds_alternative<Transcript>(r.result));
+    }
+    CHECK(backend.clear_abort_calls() == 2);
+}
+
+TEST_CASE("an abort requested right after a job is enqueued is never lost") {
+    // The window being guarded: the worker has popped the job but has not
+    // yet entered transcribe() when shutdown() asks for the abort. The gate
+    // only opens on abort, so a lost request would hang this test.
+    for (int i = 0; i < 200; ++i) {
+        GatedSpeechBackend backend;
+        {
+            TranscriptionQueue queue(backend);
+            REQUIRE(queue.try_enqueue(make_job(1)).has_value());
+            queue.shutdown();
+        }
+    }
+    CHECK(true); // reaching here means every shutdown() returned
+}
+
+TEST_CASE("drain_started reports jobs in the order the worker began them") {
+    GatedSpeechBackend backend;
+    TranscriptionQueue queue(backend);
+
+    REQUIRE(queue.try_enqueue(make_job(1)).has_value());
+    REQUIRE(queue.try_enqueue(make_job(2)).has_value());
+    REQUIRE(backend.wait_started(1));
+
+    auto started = queue.drain_started();
+    REQUIRE(started.size() == 1);
+    CHECK(started[0] == static_cast<SessionId>(1));
+    CHECK(queue.drain_started().empty());
+
+    backend.open();
+    REQUIRE(collect(queue, 2).size() == 2);
+    started = queue.drain_started();
+    REQUIRE(started.size() == 1);
+    CHECK(started[0] == static_cast<SessionId>(2));
+}
+
+TEST_CASE("snapshot reads pending and busy together") {
+    GatedSpeechBackend backend;
+    TranscriptionQueue queue(backend);
+
+    CHECK(queue.snapshot().pending == 0);
+    CHECK_FALSE(queue.snapshot().busy);
+
+    REQUIRE(queue.try_enqueue(make_job(1)).has_value());
+    REQUIRE(backend.wait_started(1));
+    REQUIRE(queue.try_enqueue(make_job(2)).has_value());
+
+    const auto snapshot = queue.snapshot();
+    CHECK(snapshot.pending == 1);
+    CHECK(snapshot.busy);
+    backend.open();
 }

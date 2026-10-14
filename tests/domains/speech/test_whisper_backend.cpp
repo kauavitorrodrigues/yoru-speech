@@ -11,7 +11,6 @@
 #include <filesystem>
 #include <numbers>
 #include <optional>
-#include <thread>
 #include <variant>
 
 using yoru::core::EventBus;
@@ -146,7 +145,7 @@ TEST_CASE("transcribe() with a real model produces a Transcript and publishes no
     CHECK_FALSE(any_event);
 }
 
-TEST_CASE("request_abort() makes a pending transcribe() fail instead of running") {
+TEST_CASE("request_abort() makes transcribe() fail until clear_abort()") {
     if (!std::filesystem::exists(kTurboModelPath)) {
         MESSAGE("skipping: large-v3-turbo model not installed (", kTurboModelPath.string(), ")");
         return;
@@ -156,18 +155,19 @@ TEST_CASE("request_abort() makes a pending transcribe() fail instead of running"
     WhisperBackend backend(bus);
     REQUIRE_FALSE(backend.load_model(turbo_model()).has_value());
 
-    // transcribe() clears the flag on entry, so aborting must come from
-    // another thread while it runs.
-    std::thread aborter([&] {
-        std::this_thread::sleep_for(std::chrono::milliseconds{20});
-        backend.request_abort();
-    });
-    const auto result =
-        backend.transcribe(SessionId{8}, std::vector<float>(16000 * 25, 0.1F), TranscriptionRequest{});
-    aborter.join();
+    // Sticky and checked before any compute step, so with the flag already
+    // set the outcome is deterministic: no timing involved.
+    backend.request_abort();
+    const auto aborted = backend.transcribe(SessionId{8}, one_second_tone(), TranscriptionRequest{});
+    REQUIRE(std::holds_alternative<SpeechError>(aborted));
+    CHECK(std::get<SpeechError>(aborted).message == "transcription aborted");
 
-    // The tone may finish before 20 ms on a fast GPU; both outcomes are
-    // valid, but an abort must never crash or hang.
-    CHECK((std::holds_alternative<Transcript>(result) ||
-           std::holds_alternative<SpeechError>(result)));
+    // transcribe() does not clear the flag by itself (the queue's worker
+    // does, via clear_abort()), so it keeps failing until then.
+    CHECK(std::holds_alternative<SpeechError>(
+        backend.transcribe(SessionId{9}, one_second_tone(), TranscriptionRequest{})));
+
+    backend.clear_abort();
+    CHECK(std::holds_alternative<Transcript>(
+        backend.transcribe(SessionId{10}, one_second_tone(), TranscriptionRequest{})));
 }

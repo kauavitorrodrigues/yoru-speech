@@ -73,11 +73,20 @@ public:
                                                    const TranscriptionRequest& request) = 0;
 
     // Asks a transcribe() running on another thread to stop early; it then
-    // returns a SpeechError. Safe to call from any thread. Used only at
-    // shutdown, so the owner does not wait for a long transcription to
-    // finish. The default does nothing: backends that cannot be
-    // interrupted simply run to completion.
+    // returns a SpeechError. Safe to call from any thread. Best effort: the
+    // engine only checks between compute steps, so it takes effect at the
+    // next step, not instantly. Sticky: it stays in force, failing every
+    // later transcribe() and transcribe_partial(), until clear_abort().
+    // Used only at shutdown, so the owner does not wait for a long
+    // transcription to finish. The default does nothing: backends that
+    // cannot be interrupted simply run to completion.
     virtual void request_abort() {}
+
+    // Withdraws a previous request_abort(). Called by whoever owns the
+    // worker thread before handing it a new job, never by transcribe()
+    // itself: a transcribe() clearing the flag on entry would swallow an
+    // abort requested just before it started.
+    virtual void clear_abort() {}
 };
 
 } // namespace yoru::speech

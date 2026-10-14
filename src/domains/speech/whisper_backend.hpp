@@ -45,6 +45,7 @@ public:
                                            const TranscriptionRequest& request) override;
 
     void request_abort() override;
+    void clear_abort() override;
 
 private:
     // Runs whisper_full over `samples` and builds the resulting Transcript,

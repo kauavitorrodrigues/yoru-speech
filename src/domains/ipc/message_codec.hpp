@@ -6,7 +6,7 @@
 #include "domains/config/events.hpp"
 #include "domains/session/events.hpp"
 #include "domains/session/service_state.hpp"
-#include "domains/session/session_manager.hpp"
+#include "domains/session/session_status.hpp"
 #include "domains/speech/events.hpp"
 #include "domains/speech/model.hpp"
 #include "domains/speech/transcript.hpp"
@@ -58,7 +58,6 @@ std::optional<core::SessionId> decode_cancel_job(const std::string& line);
 
 std::string encode_ack(const std::string& type);
 std::string encode_error(const std::string& type, const std::string& error);
-std::string encode_transcript(const std::string& type, const speech::Transcript& transcript);
 // Answer to stop_recording: the recording was accepted into the
 // transcription queue. The Transcript follows as a transcription_completed
 // event; `position` counts the jobs ahead of this one.
@@ -88,6 +87,7 @@ std::string encode_event(const speech::ModelLoaded& event);
 std::string encode_event(const config::ConfigurationChanged& event);
 std::string encode_event(const core::ErrorOccurred& event);
 std::string encode_event(const session::SessionCancelled& event);
+std::string encode_event(const session::TranscriptionQueued& event);
 std::string encode_event(const session::TranscriptionPartial& event);
 
 } // namespace yoru::ipc

@@ -101,6 +101,10 @@ StopSessionResult SessionManager::stop_session() {
             },
     });
     if (!position.has_value()) {
+        // start_session() already checked has_capacity() and this thread is
+        // the queue's only producer, so a refusal here means the queue was
+        // shut down in between: effectively a shutdown-only path. The
+        // recording is lost, which is reported as a failure.
         fail("queue", "transcription queue is full or shutting down");
         return SessionError{"transcription queue is full or shutting down"};
     }
@@ -109,12 +113,19 @@ StopSessionResult SessionManager::stop_session() {
     // tracked by the queue, and the next session can start immediately.
     active_session_.reset();
     state_ = ServiceState::Idle;
-    event_bus_.publish(speech::TranscriptionStarted{session_id});
+    event_bus_.publish(TranscriptionQueued{session_id, *position});
     return QueuedJob{.session_id = session_id, .position = *position};
 }
 
 std::size_t SessionManager::poll_completed() {
+    // Completed before started: a job's "started" notice is recorded
+    // before its result, so reading in this order guarantees every
+    // completed job's start is also in `started`, and TranscriptionStarted
+    // is always published ahead of its TranscriptionCompleted.
     auto results = queue_.drain_completed();
+    for (const core::SessionId id : queue_.drain_started()) {
+        event_bus_.publish(speech::TranscriptionStarted{id});
+    }
     for (auto& job : results) {
         if (const auto* error = std::get_if<speech::SpeechError>(&job.result)) {
             last_failed_ = job.session_id;
@@ -164,22 +175,41 @@ bool SessionManager::cancel_job(core::SessionId session_id) {
     return true;
 }
 
-std::size_t SessionManager::shutdown() {
-    return queue_.shutdown();
+std::vector<core::SessionId> SessionManager::shutdown() {
+    auto dropped = queue_.shutdown();
+    for (const core::SessionId id : dropped) {
+        event_bus_.publish(core::ErrorOccurred{
+            .session_id = id,
+            .component = "queue",
+            .message = "dropped at shutdown before it could be transcribed",
+        });
+    }
+    return dropped;
 }
 
-ServiceState SessionManager::state() const {
-    if (state_ != ServiceState::Idle) {
-        return state_;
+namespace {
+
+ServiceState derive_state(ServiceState capture_state, const QueueSnapshot& queue) {
+    if (capture_state != ServiceState::Idle) {
+        return capture_state;
     }
-    return queue_.outstanding_count() > 0 ? ServiceState::Processing : ServiceState::Idle;
+    return queue.busy || queue.pending > 0 ? ServiceState::Processing : ServiceState::Idle;
+}
+
+} // namespace
+
+ServiceState SessionManager::state() const {
+    return derive_state(state_, queue_.snapshot());
 }
 
 SessionStatus SessionManager::status() const {
+    // One snapshot feeds every field, so the reply cannot contradict itself
+    // (e.g. "processing" with nothing queued or running).
+    const QueueSnapshot queue = queue_.snapshot();
     return SessionStatus{
-        .state = state(),
-        .queued = queue_.pending_count(),
-        .processing = queue_.is_busy(),
+        .state = derive_state(state_, queue),
+        .queued = queue.pending,
+        .processing = queue.busy,
         .last_completed = last_completed_,
         .last_failed = last_failed_,
     };

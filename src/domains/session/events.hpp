@@ -2,6 +2,7 @@
 
 #include "core/session_id.hpp"
 
+#include <cstddef>
 #include <string>
 
 namespace yoru::session {
@@ -18,6 +19,15 @@ namespace yoru::session {
 // simply stopped, hence this dedicated event.
 struct SessionCancelled {
     core::SessionId session_id;
+};
+
+// Published by the Session Manager when stop_session() has accepted a
+// recording into the transcription queue. `position` counts the jobs ahead
+// of it, including the one being transcribed. speech::TranscriptionStarted
+// follows later, when the worker actually begins decoding it.
+struct TranscriptionQueued {
+    core::SessionId session_id;
+    std::size_t position = 0;
 };
 
 // Published repeatedly by the Live Transcriber while a session is

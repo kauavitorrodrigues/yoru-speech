@@ -22,6 +22,13 @@ struct TranscriptionJob {
     std::chrono::steady_clock::time_point enqueued_at = std::chrono::steady_clock::now();
 };
 
+// Queue occupancy read under a single lock, so the fields are consistent
+// with each other (separate accessor calls can straddle a job finishing).
+struct QueueSnapshot {
+    std::size_t pending = 0; // waiting, not counting the one in progress
+    bool busy = false;       // a job is being transcribed
+};
+
 // The outcome of one TranscriptionJob, in the order jobs were processed.
 struct TranscriptionJobResult {
     core::SessionId session_id{};
@@ -35,9 +42,15 @@ struct TranscriptionJobResult {
 // SpeechBackend::transcribe() (the Whisper context is not thread-safe) and
 // it never publishes events. It hands results back through a completion
 // list that the owner drains from its own thread with drain_completed(),
-// which keeps the EventBus, IPC and clipboard single-threaded. Every public
-// method may be called from the owner thread; none is meant for
-// concurrent use by several owners.
+// which keeps the EventBus, IPC and clipboard single-threaded.
+//
+// There is exactly one producer: the owner thread. Callers rely on that to
+// do check-then-act without a race, e.g. start_session() checks
+// has_capacity() and stop_session() enqueues later (capacity can only grow
+// in between, since only the worker removes jobs), and the Live Transcriber
+// checks "no work outstanding" before calling the backend itself (nothing
+// can be enqueued while the owner thread is inside that call). A second
+// producer thread would silently break both.
 class TranscriptionQueue {
 public:
     static constexpr std::size_t default_capacity = 8;
@@ -65,22 +78,26 @@ public:
     // interruptible, only shutdown() aborts it.
     bool cancel_pending(core::SessionId session_id);
 
+    // Takes the ids of jobs the worker began processing since the last
+    // call, in processing order. Lets the owner report "started" from its
+    // own thread; a job can appear here and in drain_completed() in the
+    // same round.
+    std::vector<core::SessionId> drain_started();
+
     // Takes all results completed since the last call, in processing order.
     std::vector<TranscriptionJobResult> drain_completed();
 
-    // Jobs waiting, not counting the one being processed.
-    std::size_t pending_count() const;
-
-    // True while the worker is transcribing a job.
-    bool is_busy() const;
+    // Jobs waiting and whether one is being processed, read atomically.
+    QueueSnapshot snapshot() const;
 
     // Jobs waiting plus the one being processed.
     std::size_t outstanding_count() const;
 
     // Stops accepting jobs, drops the ones still waiting, asks the backend
     // to abort the transcription in progress, and joins the worker.
-    // Returns how many waiting jobs were dropped. Idempotent.
-    std::size_t shutdown();
+    // Returns the ids of the waiting jobs that were dropped (they never
+    // run and produce no result). Idempotent.
+    std::vector<core::SessionId> shutdown();
 
 private:
     void run();
@@ -91,6 +108,7 @@ private:
     mutable std::mutex mutex_;
     std::condition_variable wake_;
     std::deque<TranscriptionJob> pending_;
+    std::vector<core::SessionId> started_;
     std::vector<TranscriptionJobResult> completed_;
     bool busy_ = false;
     bool stopping_ = false;

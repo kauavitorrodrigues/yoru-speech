@@ -46,12 +46,13 @@ def start_time_path():
 
 def send(command):
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.settimeout(5)
-    sock.connect(socket_path())
-    sock.send((json.dumps(command) + "\n").encode())
-    data = sock.recv(65536)
-    sock.close()
-    return json.loads(data.decode())
+    try:
+        sock.settimeout(5)
+        sock.connect(socket_path())
+        sock.send((json.dumps(command) + "\n").encode())
+        return read_line(sock, bytearray())
+    finally:
+        sock.close()
 
 
 def read_line(sock, buffer):
@@ -69,11 +70,15 @@ def read_line(sock, buffer):
 
 def open_event_listener():
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    sock.settimeout(5)
-    sock.connect(socket_path())
-    sock.send(b'{"type":"subscribe_events"}\n')
-    buffer = bytearray()
-    read_line(sock, buffer)  # the subscribe_events ack
+    try:
+        sock.settimeout(5)
+        sock.connect(socket_path())
+        sock.send(b'{"type":"subscribe_events"}\n')
+        buffer = bytearray()
+        read_line(sock, buffer)  # the subscribe_events ack
+    except BaseException:
+        sock.close()
+        raise
     return sock, buffer
 
 
@@ -169,6 +174,8 @@ def main():
             do_stop(check_min_hold=(requested == "stop"))
     except (OSError, ConnectionError) as error:
         notify("Yoru Speech", "daemon not reachable: " + str(error))
+    except ValueError as error:  # json.JSONDecodeError: a malformed line from the daemon
+        notify("Yoru Speech", "unexpected reply from the daemon: " + str(error))
 
 
 if __name__ == "__main__":

@@ -13,7 +13,13 @@ enum class ServiceState {
 
 // Validates whether a transition between two service states is allowed.
 //
-// Allowed transitions:
+// Allowed transitions. Note that SessionManager stores only the capture
+// side (Idle, Recording, Error) and derives Processing from its
+// transcription queue in state(): after a recording is stopped the stored
+// state goes Recording -> Idle, and the reported state is Processing while
+// jobs are queued or running, even when a new Recording starts (the
+// reported state is then Recording again). The table below is the domain
+// model's view of one session's progress.
 //
 //   Idle       -> Recording  (session started)
 //   Recording  -> Processing (recording finished, transcription starts)

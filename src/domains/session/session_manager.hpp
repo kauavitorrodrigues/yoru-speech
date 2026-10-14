@@ -5,6 +5,7 @@
 #include "domains/config/configuration.hpp"
 #include "domains/session/service_state.hpp"
 #include "domains/session/session.hpp"
+#include "domains/session/session_status.hpp"
 #include "domains/session/transcription_queue.hpp"
 #include "domains/speech/speech_backend.hpp"
 
@@ -13,6 +14,7 @@
 #include <optional>
 #include <string>
 #include <variant>
+#include <vector>
 
 namespace yoru::session {
 
@@ -23,26 +25,9 @@ struct SessionError {
     std::string message;
 };
 
-// A recording accepted by stop_session() and waiting for (or undergoing)
-// transcription. The Transcript arrives later, via TranscriptionCompleted.
-struct QueuedJob {
-    core::SessionId session_id{};
-    // Jobs ahead of this one, including the one being transcribed.
-    std::size_t position = 0;
-};
-
 // The outcome of stop_session(): exactly one of the queued job or the
 // reason the recording could not be accepted.
 using StopSessionResult = std::variant<QueuedJob, SessionError>;
-
-// A snapshot of capture and transcription activity, for status replies.
-struct SessionStatus {
-    ServiceState state = ServiceState::Idle;
-    std::size_t queued = 0;    // jobs waiting, not counting the one in progress
-    bool processing = false;   // a job is being transcribed right now
-    std::optional<core::SessionId> last_completed;
-    std::optional<core::SessionId> last_failed;
-};
 
 // Coordinates the full dictation cycle: start -> record -> stop ->
 // (queued) -> transcribe -> Transcript. The only component authorized to
@@ -97,19 +82,20 @@ public:
 
     // Stops the active recording and queues it for transcription.
     // Requires the service to be Recording. Returns as soon as the audio
-    // is safely queued, publishing TranscriptionStarted ("queued"); the
-    // Transcript is published later by poll_completed(). Returns an error
+    // is safely queued, publishing TranscriptionQueued; the Transcript is
+    // published later by poll_completed(). Returns an error
     // if no session is recording, or if the recording cannot be stopped or
     // queued, in which case the service transitions to Error instead of
     // Idle.
     StopSessionResult stop_session();
 
-    // Publishes the outcome of every transcription finished since the
-    // last call, in the order the jobs were queued: TranscriptionCompleted
-    // on success, ErrorOccurred on failure. A failed transcription does
+    // Publishes what the transcription worker did since the last call, in
+    // order: TranscriptionStarted for each job it began, then for each job
+    // it finished TranscriptionCompleted on success or ErrorOccurred on
+    // failure. A failed transcription does
     // not put the service in Error (it concerns one job, not capture).
-    // Returns how many results were published. Call regularly from the
-    // controlling thread.
+    // Returns how many results (not counting "started" notices) were
+    // published. Call regularly from the controlling thread.
     std::size_t poll_completed();
 
     // Cancels the active session from Recording or Error, discarding the
@@ -126,11 +112,12 @@ public:
     bool cancel_job(core::SessionId session_id);
 
     // Stops accepting work, drops queued jobs, aborts the transcription in
-    // progress and joins the worker. Returns how many queued jobs were
-    // dropped. Must run before the speech backend is destroyed. Results of
-    // jobs that finished (or were aborted) can still be published with
-    // poll_completed() afterwards.
-    std::size_t shutdown();
+    // progress and joins the worker. Publishes an ErrorOccurred
+    // (component "queue") for every dropped job so clients waiting on it get
+    // a definite outcome, and returns their ids. Must run before the speech
+    // backend is destroyed. The aborted job's result can still be published
+    // with poll_completed() afterwards.
+    std::vector<core::SessionId> shutdown();
 
     // Derived from capture and queue activity: Recording or Error while
     // capture says so, otherwise Processing if any job is queued or being

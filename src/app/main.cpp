@@ -51,9 +51,14 @@ void log_domain_events(yoru::core::EventBus& event_bus, const yoru::core::Logger
             logger.info("recording finished (session " + session_id_str(event.session_id) + ", " +
                         std::to_string(event.recording.duration().count()) + "ms)");
         });
+    event_bus.subscribe<yoru::session::TranscriptionQueued>(
+        [&logger](const yoru::session::TranscriptionQueued& event) {
+            logger.info("transcription queued (session " + session_id_str(event.session_id) +
+                        ", position " + std::to_string(event.position) + ")");
+        });
     event_bus.subscribe<yoru::speech::TranscriptionStarted>(
         [&logger](const yoru::speech::TranscriptionStarted& event) {
-            logger.info("transcription queued (session " + session_id_str(event.session_id) + ")");
+            logger.info("transcription started (session " + session_id_str(event.session_id) + ")");
         });
     event_bus.subscribe<yoru::speech::TranscriptionCompleted>(
         [&logger](const yoru::speech::TranscriptionCompleted& event) {
@@ -127,7 +132,11 @@ int main() {
     // publishers (WhisperBackend, AutoClipboard) actually observable.
     event_bus.subscribe<yoru::core::ErrorOccurred>(
         [&logger](const yoru::core::ErrorOccurred& error) {
-            logger.warn(error.component + ": " + error.message);
+            const std::string session =
+                error.session_id.has_value()
+                    ? " (session " + session_id_str(error.session_id.value()) + ")"
+                    : "";
+            logger.warn(error.component + ": " + error.message + session);
         });
     log_domain_events(event_bus, logger);
 
@@ -180,8 +189,11 @@ int main() {
     // shutdown(), which must also run before the speech backend is
     // destroyed since the worker thread calls into it.
     session_manager.cancel_session();
-    if (const auto dropped = session_manager.shutdown(); dropped > 0) {
-        logger.warn("dropped " + std::to_string(dropped) +
+    // Each dropped job is also reported individually (with its session id)
+    // as an ErrorOccurred, which the subscribers above log and forward to
+    // IPC clients.
+    if (const auto dropped = session_manager.shutdown(); !dropped.empty()) {
+        logger.warn("dropped " + std::to_string(dropped.size()) +
                     " queued transcription(s) at shutdown");
     }
     session_manager.poll_completed();

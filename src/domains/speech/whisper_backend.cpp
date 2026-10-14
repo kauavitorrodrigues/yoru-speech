@@ -69,6 +69,10 @@ void WhisperBackend::request_abort() {
     impl_->abort_requested.store(true);
 }
 
+void WhisperBackend::clear_abort() {
+    impl_->abort_requested.store(false);
+}
+
 bool WhisperBackend::has_model_loaded() const {
     return impl_->ctx != nullptr;
 }
@@ -156,7 +160,7 @@ TranscriptionResult WhisperBackend::transcribe(core::SessionId /*session_id*/,
     // Publishes nothing: transcribe() runs on the transcription worker
     // thread, and EventBus is not thread-safe. The caller reports
     // TranscriptionStarted/Completed/ErrorOccurred from its own thread.
-    impl_->abort_requested.store(false);
+    // Does not touch the abort flag: see SpeechBackend::clear_abort().
     return run_whisper_full(samples, request);
 }
 

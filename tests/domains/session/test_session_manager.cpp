@@ -69,6 +69,9 @@ public:
             last_request = request;
             transcribe_calls.push_back(session_id);
             gate_cv.wait(lock, [this] { return !gated || aborted; });
+            if (aborted) {
+                return SpeechError{"transcription aborted"};
+            }
         }
         if (should_fail) {
             return SpeechError{"fake transcription failure"};
@@ -92,6 +95,11 @@ public:
         std::lock_guard lock(gate_mutex);
         aborted = true;
         gate_cv.notify_all();
+    }
+
+    void clear_abort() override {
+        std::lock_guard lock(gate_mutex);
+        aborted = false;
     }
 
     // While gated, transcribe() blocks until open_gate() (or an abort).
@@ -125,6 +133,15 @@ private:
     std::optional<TranscriptionRequest> last_request;
     std::vector<SessionId> transcribe_calls;
 };
+
+// Waits until the worker has entered transcribe() at least `count` times.
+bool wait_for_calls(FakeSpeechBackend& backend, std::size_t count) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+    while (backend.calls().size() < count && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds{2});
+    }
+    return backend.calls().size() >= count;
+}
 
 // Pumps poll_completed() until `count` results were published or time
 // runs out, the way the main loop does.
@@ -224,12 +241,25 @@ TEST_CASE("start then stop queues the job and poll_completed() publishes the Tra
     FakeSpeechBackend speech_backend;
     SessionManager manager(bus, recording_manager, speech_backend, Configuration{});
 
+    std::vector<std::string> order;
+    std::optional<yoru::session::TranscriptionQueued> queued;
     std::optional<SessionId> started_id;
     std::optional<yoru::speech::TranscriptionCompleted> completed;
+    bus.subscribe<yoru::session::TranscriptionQueued>(
+        [&](const yoru::session::TranscriptionQueued& event) {
+            queued = event;
+            order.push_back("queued");
+        });
     bus.subscribe<yoru::speech::TranscriptionStarted>(
-        [&](const yoru::speech::TranscriptionStarted& event) { started_id = event.session_id; });
+        [&](const yoru::speech::TranscriptionStarted& event) {
+            started_id = event.session_id;
+            order.push_back("started");
+        });
     bus.subscribe<yoru::speech::TranscriptionCompleted>(
-        [&](const yoru::speech::TranscriptionCompleted& event) { completed = event; });
+        [&](const yoru::speech::TranscriptionCompleted& event) {
+            completed = event;
+            order.push_back("completed");
+        });
 
     if (skip_if_no_device(manager.start_session())) {
         return;
@@ -242,10 +272,19 @@ TEST_CASE("start then stop queues the job and poll_completed() publishes the Tra
     REQUIRE(std::holds_alternative<QueuedJob>(result));
     const auto job = std::get<QueuedJob>(result);
     CHECK(job.position == 0);
-    REQUIRE(started_id.has_value());
-    CHECK(*started_id == job.session_id);
+    // stop_session() only reports "queued"; "started" comes from the worker.
+    REQUIRE(queued.has_value());
+    CHECK(queued->session_id == job.session_id);
+    CHECK(queued->position == 0);
+    CHECK_FALSE(started_id.has_value());
 
     REQUIRE(pump_until(manager, 1));
+    REQUIRE(started_id.has_value());
+    CHECK(*started_id == job.session_id);
+    REQUIRE(order.size() == 3);
+    CHECK(order[0] == "queued");
+    CHECK(order[1] == "started");
+    CHECK(order[2] == "completed");
     CHECK(manager.state() == ServiceState::Idle);
     REQUIRE(completed.has_value());
     CHECK(completed->session_id == job.session_id);
@@ -313,10 +352,7 @@ TEST_CASE("start_session() is rejected, and reported, while the transcription qu
         REQUIRE(std::holds_alternative<QueuedJob>(manager.stop_session()));
         if (i == 0) {
             // Wait until the worker has actually taken job A off the queue.
-            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
-            while (speech_backend.calls().empty() && std::chrono::steady_clock::now() < deadline) {
-                std::this_thread::sleep_for(std::chrono::milliseconds{2});
-            }
+            REQUIRE(wait_for_calls(speech_backend, 1));
         }
     }
 
@@ -355,10 +391,7 @@ TEST_CASE("cancel_job() removes a queued job but not the one in progress") {
         REQUIRE(std::holds_alternative<QueuedJob>(result));
         ids.push_back(std::get<QueuedJob>(result).session_id);
         if (i == 0) {
-            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
-            while (speech_backend.calls().empty() && std::chrono::steady_clock::now() < deadline) {
-                std::this_thread::sleep_for(std::chrono::milliseconds{2});
-            }
+            REQUIRE(wait_for_calls(speech_backend, 1));
         }
     }
 
@@ -372,31 +405,48 @@ TEST_CASE("cancel_job() removes a queued job but not the one in progress") {
     CHECK(speech_backend.calls().size() == 1);
 }
 
-TEST_CASE("shutdown() aborts the job in progress and drops the queued ones") {
+TEST_CASE("shutdown() aborts the job in progress and reports every dropped job") {
     EventBus bus;
     RecordingManager recording_manager(bus);
     FakeSpeechBackend speech_backend;
     speech_backend.close_gate();
     SessionManager manager(bus, recording_manager, speech_backend, Configuration{});
 
+    std::vector<ErrorOccurred> errors;
+    bus.subscribe<ErrorOccurred>([&](const ErrorOccurred& event) { errors.push_back(event); });
+
+    std::vector<SessionId> ids;
     for (int i = 0; i < 2; ++i) {
         if (skip_if_no_device(manager.start_session())) {
             speech_backend.open_gate();
             return;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds{200});
-        REQUIRE(std::holds_alternative<QueuedJob>(manager.stop_session()));
+        const auto result = manager.stop_session();
+        REQUIRE(std::holds_alternative<QueuedJob>(result));
+        ids.push_back(std::get<QueuedJob>(result).session_id);
         if (i == 0) {
-            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
-            while (speech_backend.calls().empty() && std::chrono::steady_clock::now() < deadline) {
-                std::this_thread::sleep_for(std::chrono::milliseconds{2});
-            }
+            REQUIRE(wait_for_calls(speech_backend, 1));
         }
     }
 
-    CHECK(manager.shutdown() == 1);
+    const auto dropped = manager.shutdown();
+
+    // Job 2 never ran: it is named in the return value and reported.
+    REQUIRE(dropped.size() == 1);
+    CHECK(dropped[0] == ids[1]);
+    REQUIRE(errors.size() == 1);
+    CHECK(errors[0].component == "queue");
+    CHECK(errors[0].session_id == ids[1]);
     CHECK_FALSE(manager.transcription_busy());
     CHECK(manager.state() == ServiceState::Idle);
+
+    // Job 1 was aborted mid-flight; its failure is published on the next
+    // poll, which is what main() relies on after shutdown().
+    CHECK(manager.poll_completed() == 1);
+    REQUIRE(errors.size() == 2);
+    CHECK(errors[1].component == "speech");
+    CHECK(errors[1].session_id == ids[0]);
 }
 
 TEST_CASE("stop_session() passes the configured language and prompt to the Speech Backend") {

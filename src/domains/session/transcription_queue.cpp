@@ -41,19 +41,19 @@ bool TranscriptionQueue::cancel_pending(core::SessionId session_id) {
     return false;
 }
 
+std::vector<core::SessionId> TranscriptionQueue::drain_started() {
+    std::lock_guard lock(mutex_);
+    return std::exchange(started_, {});
+}
+
 std::vector<TranscriptionJobResult> TranscriptionQueue::drain_completed() {
     std::lock_guard lock(mutex_);
     return std::exchange(completed_, {});
 }
 
-std::size_t TranscriptionQueue::pending_count() const {
+QueueSnapshot TranscriptionQueue::snapshot() const {
     std::lock_guard lock(mutex_);
-    return pending_.size();
-}
-
-bool TranscriptionQueue::is_busy() const {
-    std::lock_guard lock(mutex_);
-    return busy_;
+    return QueueSnapshot{.pending = pending_.size(), .busy = busy_};
 }
 
 std::size_t TranscriptionQueue::outstanding_count() const {
@@ -61,17 +61,21 @@ std::size_t TranscriptionQueue::outstanding_count() const {
     return pending_.size() + (busy_ ? 1 : 0);
 }
 
-std::size_t TranscriptionQueue::shutdown() {
-    std::size_t dropped = 0;
+std::vector<core::SessionId> TranscriptionQueue::shutdown() {
+    std::vector<core::SessionId> dropped;
     {
         std::lock_guard lock(mutex_);
         stopping_ = true;
-        dropped = pending_.size();
+        for (const auto& job : pending_) {
+            dropped.push_back(job.session_id);
+        }
         pending_.clear();
     }
     wake_.notify_all();
-    // Outside the lock: the worker may be inside transcribe(), which does
-    // not hold mutex_, and the abort only needs to reach the backend.
+    // After stopping_ is set (under the lock) the worker takes no new job,
+    // so it can no longer clear the abort flag; this request therefore
+    // cannot be lost. Outside the lock: the worker may be inside
+    // transcribe(), which does not hold mutex_.
     backend_.request_abort();
     if (worker_.joinable()) {
         worker_.join();
@@ -88,9 +92,15 @@ void TranscriptionQueue::run() {
             if (stopping_) {
                 return;
             }
+            // Cleared here, under the lock and before the job starts, not
+            // inside transcribe(): shutdown() sets stopping_ under this same
+            // lock before requesting the abort, so a request can never be
+            // erased by a job that was already on its way in.
+            backend_.clear_abort();
             job = std::move(pending_.front());
             pending_.pop_front();
             busy_ = true;
+            started_.push_back(job.session_id);
         }
 
         auto result = backend_.transcribe(job.session_id, job.samples, job.request);

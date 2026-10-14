@@ -23,11 +23,11 @@ using yoru::ipc::encode_event;
 using yoru::ipc::encode_models;
 using yoru::ipc::encode_queued;
 using yoru::ipc::encode_state;
-using yoru::ipc::encode_transcript;
 using yoru::ipc::parse_message;
 using yoru::session::QueuedJob;
 using yoru::session::ServiceState;
 using yoru::session::SessionStatus;
+using yoru::session::TranscriptionQueued;
 using yoru::session::SessionCancelled;
 using yoru::session::TranscriptionPartial;
 using yoru::speech::Model;
@@ -156,23 +156,6 @@ TEST_CASE("encode_error() echoes the type and carries the error message") {
     CHECK(encoded.find("a session is already active") != std::string::npos);
 }
 
-TEST_CASE("encode_transcript() carries every Transcript field") {
-    const Transcript transcript{
-        .text = "hello world",
-        .detected_language = "en",
-        .requested_language = "auto",
-        .audio_duration = std::chrono::milliseconds{1500},
-        .processing_time = std::chrono::milliseconds{80},
-    };
-
-    const auto encoded = encode_transcript("stop_recording", transcript);
-
-    CHECK(encoded.find("hello world") != std::string::npos);
-    CHECK(encoded.find(R"("detected_language":"en")") != std::string::npos);
-    CHECK(encoded.find(R"("audio_duration_ms":1500)") != std::string::npos);
-    CHECK(encoded.find(R"("processing_time_ms":80)") != std::string::npos);
-}
-
 TEST_CASE("encode_state() renders each ServiceState as a lowercase string") {
     const auto render = [](ServiceState state) {
         SessionStatus status;
@@ -291,6 +274,15 @@ TEST_CASE("encode_event() for RecordingFinished carries duration and format, not
     CHECK(encoded.find(R"("duration_ms":1000)") != std::string::npos);
     CHECK(encoded.find(R"("sample_rate":4)") != std::string::npos);
     CHECK(encoded.find("samples") == std::string::npos);
+}
+
+TEST_CASE("encode_event() for TranscriptionQueued carries the session id and position") {
+    const auto encoded =
+        encode_event(TranscriptionQueued{.session_id = SessionId{4}, .position = 3});
+
+    CHECK(encoded.find(R"("event":"transcription_queued")") != std::string::npos);
+    CHECK(encoded.find(R"("session_id":4)") != std::string::npos);
+    CHECK(encoded.find(R"("position":3)") != std::string::npos);
 }
 
 TEST_CASE("encode_event() for TranscriptionStarted carries the session id") {

@@ -159,19 +159,6 @@ std::string encode_error(const std::string& type, const std::string& error) {
     return json{{"type", type}, {"ok", false}, {"error", error}}.dump();
 }
 
-std::string encode_transcript(const std::string& type, const speech::Transcript& transcript) {
-    return json{
-        {"type", type},
-        {"ok", true},
-        {"text", transcript.text},
-        {"detected_language", transcript.detected_language},
-        {"requested_language", transcript.requested_language},
-        {"audio_duration_ms", transcript.audio_duration.count()},
-        {"processing_time_ms", transcript.processing_time.count()},
-    }
-        .dump();
-}
-
 std::string encode_queued(const std::string& type, const session::QueuedJob& job) {
     return json{
         {"type", type},
@@ -255,6 +242,13 @@ std::string encode_event(const speech::TranscriptionCompleted& event) {
     envelope["requested_language"] = event.transcript.requested_language;
     envelope["audio_duration_ms"] = event.transcript.audio_duration.count();
     envelope["processing_time_ms"] = event.transcript.processing_time.count();
+    return envelope.dump();
+}
+
+std::string encode_event(const session::TranscriptionQueued& event) {
+    auto envelope = event_envelope("transcription_queued");
+    envelope["session_id"] = raw(event.session_id);
+    envelope["position"] = event.position;
     return envelope.dump();
 }
 
