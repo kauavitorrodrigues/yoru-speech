@@ -2,6 +2,7 @@
 
 #include "domains/speech/events.hpp"
 
+#include <ggml-backend.h>
 #include <whisper.h>
 
 #include <atomic>
@@ -22,7 +23,13 @@ struct WhisperBackend::Impl {
 };
 
 WhisperBackend::WhisperBackend(core::EventBus& event_bus)
-    : event_bus_(event_bus), impl_(std::make_unique<Impl>()) {}
+    : event_bus_(event_bus), impl_(std::make_unique<Impl>()) {
+    // ggml ships its CPU/GPU backends as separate plugins (e.g.
+    // /usr/lib/ggml/*.so) that whisper.cpp no longer loads on its own;
+    // without this, ggml_backend_dev_count() is 0 and model loading
+    // aborts with GGML_ASSERT(device) failed.
+    ggml_backend_load_all();
+}
 
 WhisperBackend::~WhisperBackend() {
     unload_model();
