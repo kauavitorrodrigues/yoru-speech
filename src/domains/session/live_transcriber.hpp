@@ -164,6 +164,12 @@ private:
 
     std::optional<std::chrono::steady_clock::time_point> last_tick_at_;
 
+    // Set when a tick was skipped because the transcription worker owned
+    // the backend; the next tick that does run then caps its window (see
+    // tick()), since a long pause leaves far more uncommitted audio than a
+    // normal segment holds.
+    bool paused_for_worker_ = false;
+
     // Index into the recording's full sample buffer where the current,
     // not-yet-committed segment begins. Advances only on a force-commit.
     std::size_t committed_sample_count_ = 0;

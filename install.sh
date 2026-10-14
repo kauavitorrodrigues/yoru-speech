@@ -33,7 +33,7 @@ install_deps() {
 
     local pacman_pkgs=(
         base-devel cmake pkgconf
-        whisper-cpp-vulkan miniaudio tomlplusplus nlohmann-json
+        whisper-cpp miniaudio tomlplusplus nlohmann-json
         wl-clipboard
     )
     local to_install=()

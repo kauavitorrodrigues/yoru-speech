@@ -12,6 +12,7 @@ namespace {
 constexpr const char* kStartRecording = "start_recording";
 constexpr const char* kStopRecording = "stop_recording";
 constexpr const char* kCancelSession = "cancel_session";
+constexpr const char* kCancelJob = "cancel_job";
 constexpr const char* kGetState = "get_state";
 constexpr const char* kGetConfig = "get_config";
 constexpr const char* kSetConfig = "set_config";
@@ -44,7 +45,20 @@ std::string CommandDispatcher::handle_line(const std::string& line) const {
         if (const auto* error = std::get_if<session::SessionError>(&result)) {
             return encode_error(type, error->message);
         }
-        return encode_transcript(type, std::get<speech::Transcript>(result));
+        // Acknowledged as soon as the audio is queued; the Transcript is
+        // pushed later as a transcription_completed event.
+        return encode_queued(type, std::get<session::QueuedJob>(result));
+    }
+
+    if (type == kCancelJob) {
+        const auto session_id = decode_cancel_job(line);
+        if (!session_id.has_value()) {
+            return encode_error(type, "session_id must be a non-negative integer");
+        }
+        if (!session_manager_.cancel_job(session_id.value())) {
+            return encode_error(type, "no queued job with that session_id");
+        }
+        return encode_ack(type);
     }
 
     if (type == kCancelSession) {
@@ -55,7 +69,7 @@ std::string CommandDispatcher::handle_line(const std::string& line) const {
     }
 
     if (type == kGetState) {
-        return encode_state(type, session_manager_.state());
+        return encode_state(type, session_manager_.status());
     }
 
     if (type == kGetConfig) {

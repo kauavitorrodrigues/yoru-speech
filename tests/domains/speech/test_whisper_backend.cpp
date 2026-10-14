@@ -119,7 +119,7 @@ TEST_CASE("load_model() with a real model succeeds and publishes ModelLoaded") {
     CHECK(loaded->name == "ggml-large-v3-turbo-q5_0");
 }
 
-TEST_CASE("transcribe() with a real model produces a Transcript and publishes both events") {
+TEST_CASE("transcribe() with a real model produces a Transcript and publishes no events") {
     if (!std::filesystem::exists(kTurboModelPath)) {
         MESSAGE("skipping: large-v3-turbo model not installed (", kTurboModelPath.string(), ")");
         return;
@@ -128,12 +128,11 @@ TEST_CASE("transcribe() with a real model produces a Transcript and publishes bo
     EventBus bus;
     WhisperBackend backend(bus);
 
-    std::optional<SessionId> started_id;
-    std::optional<Transcript> completed_transcript;
-    bus.subscribe<TranscriptionStarted>(
-        [&](const TranscriptionStarted& event) { started_id = event.session_id; });
-    bus.subscribe<TranscriptionCompleted>(
-        [&](const TranscriptionCompleted& event) { completed_transcript = event.transcript; });
+    // transcribe() runs on the worker thread, where publishing is unsafe:
+    // reporting is the caller's job.
+    bool any_event = false;
+    bus.subscribe<TranscriptionStarted>([&](const TranscriptionStarted&) { any_event = true; });
+    bus.subscribe<TranscriptionCompleted>([&](const TranscriptionCompleted&) { any_event = true; });
 
     REQUIRE_FALSE(backend.load_model(turbo_model()).has_value());
 
@@ -143,9 +142,32 @@ TEST_CASE("transcribe() with a real model produces a Transcript and publishes bo
     const auto& transcript = std::get<Transcript>(result);
     CHECK(transcript.requested_language == "auto");
     CHECK(transcript.audio_duration == std::chrono::milliseconds{1000});
+    CHECK_FALSE(any_event);
+}
 
-    REQUIRE(started_id.has_value());
-    CHECK(started_id.value() == SessionId{7});
-    REQUIRE(completed_transcript.has_value());
-    CHECK(completed_transcript->audio_duration == std::chrono::milliseconds{1000});
+TEST_CASE("request_abort() makes transcribe() fail until clear_abort()") {
+    if (!std::filesystem::exists(kTurboModelPath)) {
+        MESSAGE("skipping: large-v3-turbo model not installed (", kTurboModelPath.string(), ")");
+        return;
+    }
+
+    EventBus bus;
+    WhisperBackend backend(bus);
+    REQUIRE_FALSE(backend.load_model(turbo_model()).has_value());
+
+    // Sticky and checked before any compute step, so with the flag already
+    // set the outcome is deterministic: no timing involved.
+    backend.request_abort();
+    const auto aborted = backend.transcribe(SessionId{8}, one_second_tone(), TranscriptionRequest{});
+    REQUIRE(std::holds_alternative<SpeechError>(aborted));
+    CHECK(std::get<SpeechError>(aborted).message == "transcription aborted");
+
+    // transcribe() does not clear the flag by itself (the queue's worker
+    // does, via clear_abort()), so it keeps failing until then.
+    CHECK(std::holds_alternative<SpeechError>(
+        backend.transcribe(SessionId{9}, one_second_tone(), TranscriptionRequest{})));
+
+    backend.clear_abort();
+    CHECK(std::holds_alternative<Transcript>(
+        backend.transcribe(SessionId{10}, one_second_tone(), TranscriptionRequest{})));
 }

@@ -6,6 +6,7 @@
 #include "domains/config/events.hpp"
 #include "domains/session/events.hpp"
 #include "domains/session/service_state.hpp"
+#include "domains/session/session_status.hpp"
 #include "domains/speech/events.hpp"
 #include "domains/speech/model.hpp"
 #include "domains/speech/transcript.hpp"
@@ -46,14 +47,25 @@ struct DecodedSetConfig {
 // defaults.
 DecodedSetConfig decode_set_config(const std::string& line, const config::Configuration& base);
 
+// Decodes `line` as a cancel_job request: the "session_id" of the queued
+// job to remove. Returns nullopt if the field is missing or not a
+// non-negative integer.
+std::optional<core::SessionId> decode_cancel_job(const std::string& line);
+
 // --- Response encoding ---
 // Every response echoes back `type` from the request it answers, so a
 // client can match responses to the commands it sent.
 
 std::string encode_ack(const std::string& type);
 std::string encode_error(const std::string& type, const std::string& error);
-std::string encode_transcript(const std::string& type, const speech::Transcript& transcript);
-std::string encode_state(const std::string& type, session::ServiceState state);
+// Answer to stop_recording: the recording was accepted into the
+// transcription queue. The Transcript follows as a transcription_completed
+// event; `position` counts the jobs ahead of this one.
+std::string encode_queued(const std::string& type, const session::QueuedJob& job);
+// "state" keeps its single-string meaning (idle/recording/processing/
+// error); the queue fields are additive. last_completed/last_failed are
+// omitted until such a session exists.
+std::string encode_state(const std::string& type, const session::SessionStatus& status);
 std::string encode_config(const std::string& type, const config::Configuration& configuration);
 std::string encode_models(const std::string& type, const std::vector<speech::Model>& models);
 
@@ -75,6 +87,7 @@ std::string encode_event(const speech::ModelLoaded& event);
 std::string encode_event(const config::ConfigurationChanged& event);
 std::string encode_event(const core::ErrorOccurred& event);
 std::string encode_event(const session::SessionCancelled& event);
+std::string encode_event(const session::TranscriptionQueued& event);
 std::string encode_event(const session::TranscriptionPartial& event);
 
 } // namespace yoru::ipc

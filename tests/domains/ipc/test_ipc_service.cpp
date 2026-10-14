@@ -43,14 +43,11 @@ using yoru::speech::TranscriptionResult;
 namespace {
 
 // Same role as CommandDispatcher's own tests: a SpeechBackend that never
-// touches whisper.cpp, so this test doesn't need a real model. Publishes
-// TranscriptionStarted/TranscriptionCompleted like WhisperBackend does, so
-// tests exercising downstream consumers of those events (e.g.
-// AutoClipboard) see the same behavior a real backend would produce.
+// touches whisper.cpp, so this test doesn't need a real model. Like
+// WhisperBackend it publishes nothing: transcribe() runs on the worker
+// thread, and SessionManager::poll_completed() publishes the events.
 class FakeSpeechBackend : public SpeechBackend {
 public:
-    explicit FakeSpeechBackend(EventBus& event_bus) : event_bus_(event_bus) {}
-
     std::optional<SpeechError> load_model(const Model&) override {
         return std::nullopt;
     }
@@ -61,10 +58,9 @@ public:
         return true;
     }
 
-    TranscriptionResult transcribe(yoru::core::SessionId session_id,
+    TranscriptionResult transcribe(yoru::core::SessionId /*session_id*/,
                                    const std::vector<float>& samples,
                                    const TranscriptionRequest& request) override {
-        event_bus_.publish(yoru::speech::TranscriptionStarted{session_id});
         Transcript transcript{
             .text = "fake transcript",
             .detected_language = "en",
@@ -73,7 +69,6 @@ public:
                                                         1000 / yoru::audio::kSampleRate},
             .processing_time = std::chrono::milliseconds{1},
         };
-        event_bus_.publish(yoru::speech::TranscriptionCompleted{session_id, transcript});
         return transcript;
     }
 
@@ -88,9 +83,6 @@ public:
             .processing_time = std::chrono::milliseconds{1},
         };
     }
-
-private:
-    EventBus& event_bus_;
 };
 
 std::filesystem::path unique_test_config_path() {
@@ -116,7 +108,7 @@ struct Fixture {
     RecordingManager recording_manager{bus};
     ConfigurationManager configuration_manager{config_path, bus};
     AutoClipboard auto_clipboard{bus, configuration_manager.current()};
-    FakeSpeechBackend speech_backend{bus};
+    FakeSpeechBackend speech_backend;
     SessionManager session_manager{bus, recording_manager, speech_backend,
                                    configuration_manager.current()};
     IpcService service{bus, session_manager, configuration_manager, socket_path,
@@ -138,7 +130,22 @@ struct Fixture {
     void pump(int rounds = 20, int timeout_ms = 20) {
         for (int i = 0; i < rounds; ++i) {
             service.poll_once(timeout_ms);
+            session_manager.poll_completed();
         }
+    }
+
+    // Reads lines until one contains `needle`, skipping the others (e.g.
+    // events interleaved with the response being waited for). Returns an
+    // empty string if none arrives.
+    std::string read_until(TestClient& client, const std::string& needle, int attempts = 40) {
+        for (int i = 0; i < attempts; ++i) {
+            pump(1, 10);
+            const auto line = client.read_line(10);
+            if (line.find(needle) != std::string::npos) {
+                return line;
+            }
+        }
+        return {};
     }
 };
 
@@ -288,14 +295,23 @@ TEST_CASE("the full dictation flow works end-to-end: connect, start, stop, trans
         return;
     }
 
+    // The Transcript arrives as an event, so listen for events first.
+    client.send_line(R"({"type":"subscribe_events"})");
+    REQUIRE_FALSE(fixture.read_until(client, R"("type":"subscribe_events")").empty());
+
     std::this_thread::sleep_for(std::chrono::milliseconds{200});
 
     client.send_line(R"({"type":"stop_recording"})");
-    fixture.pump();
-    const auto response = client.read_line();
+    const auto ack = fixture.read_until(client, R"("type":"stop_recording")");
 
-    CHECK(response.find(R"("ok":true)") != std::string::npos);
-    CHECK(response.find(R"("text":"fake transcript")") != std::string::npos);
+    // The response is only an acknowledgement that the audio was queued...
+    CHECK(ack.find(R"("ok":true)") != std::string::npos);
+    CHECK(ack.find(R"("session_id")") != std::string::npos);
+    CHECK(ack.find("fake transcript") == std::string::npos);
+
+    // ...and the Transcript reaches the clipboard once the worker is done.
+    const auto event = fixture.read_until(client, R"("event":"transcription_completed")");
+    CHECK(event.find(R"("text":"fake transcript")") != std::string::npos);
     CHECK(read_clipboard() == "fake transcript");
 }
 
@@ -316,11 +332,9 @@ TEST_CASE("an error mid-flow does not corrupt state: a normal session still work
     }
 
     client.send_line(R"({"type":"stop_recording"})");
-    fixture.pump();
-    const auto recovered_response = client.read_line();
+    const auto recovered_response = fixture.read_until(client, R"("type":"stop_recording")");
 
     CHECK(recovered_response.find(R"("ok":true)") != std::string::npos);
-    CHECK(recovered_response.find(R"("text":"fake transcript")") != std::string::npos);
 }
 
 TEST_CASE("a disconnected client's event subscription is forgotten without crashing") {

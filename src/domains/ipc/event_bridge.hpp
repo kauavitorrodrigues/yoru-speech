@@ -8,7 +8,7 @@
 namespace yoru::ipc {
 
 // Bridges EventBus facts to connected IPC clients that opted in. Every
-// domain event (RecordingStarted, RecordingFinished, TranscriptionStarted,
+// domain event (RecordingStarted, RecordingFinished, TranscriptionQueued, TranscriptionStarted,
 // TranscriptionCompleted, TranscriptionPartial, ModelLoaded,
 // ConfigurationChanged, ErrorOccurred, SessionCancelled) is encoded (see
 // message_codec.hpp) and pushed to every subscribed client via

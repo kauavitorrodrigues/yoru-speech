@@ -14,16 +14,20 @@ using yoru::config::ConfigurationChanged;
 using yoru::config::ModelLoadPolicy;
 using yoru::core::ErrorOccurred;
 using yoru::core::SessionId;
+using yoru::ipc::decode_cancel_job;
 using yoru::ipc::decode_set_config;
 using yoru::ipc::encode_ack;
 using yoru::ipc::encode_config;
 using yoru::ipc::encode_error;
 using yoru::ipc::encode_event;
 using yoru::ipc::encode_models;
+using yoru::ipc::encode_queued;
 using yoru::ipc::encode_state;
-using yoru::ipc::encode_transcript;
 using yoru::ipc::parse_message;
+using yoru::session::QueuedJob;
 using yoru::session::ServiceState;
+using yoru::session::SessionStatus;
+using yoru::session::TranscriptionQueued;
 using yoru::session::SessionCancelled;
 using yoru::session::TranscriptionPartial;
 using yoru::speech::Model;
@@ -152,32 +156,54 @@ TEST_CASE("encode_error() echoes the type and carries the error message") {
     CHECK(encoded.find("a session is already active") != std::string::npos);
 }
 
-TEST_CASE("encode_transcript() carries every Transcript field") {
-    const Transcript transcript{
-        .text = "hello world",
-        .detected_language = "en",
-        .requested_language = "auto",
-        .audio_duration = std::chrono::milliseconds{1500},
-        .processing_time = std::chrono::milliseconds{80},
+TEST_CASE("encode_state() renders each ServiceState as a lowercase string") {
+    const auto render = [](ServiceState state) {
+        SessionStatus status;
+        status.state = state;
+        return encode_state("get_state", status);
     };
-
-    const auto encoded = encode_transcript("stop_recording", transcript);
-
-    CHECK(encoded.find("hello world") != std::string::npos);
-    CHECK(encoded.find(R"("detected_language":"en")") != std::string::npos);
-    CHECK(encoded.find(R"("audio_duration_ms":1500)") != std::string::npos);
-    CHECK(encoded.find(R"("processing_time_ms":80)") != std::string::npos);
+    CHECK(render(ServiceState::Idle).find(R"("state":"idle")") != std::string::npos);
+    CHECK(render(ServiceState::Recording).find(R"("state":"recording")") != std::string::npos);
+    CHECK(render(ServiceState::Processing).find(R"("state":"processing")") != std::string::npos);
+    CHECK(render(ServiceState::Error).find(R"("state":"error")") != std::string::npos);
 }
 
-TEST_CASE("encode_state() renders each ServiceState as a lowercase string") {
-    CHECK(encode_state("get_state", ServiceState::Idle).find(R"("state":"idle")") !=
-          std::string::npos);
-    CHECK(encode_state("get_state", ServiceState::Recording).find(R"("state":"recording")") !=
-          std::string::npos);
-    CHECK(encode_state("get_state", ServiceState::Processing).find(R"("state":"processing")") !=
-          std::string::npos);
-    CHECK(encode_state("get_state", ServiceState::Error).find(R"("state":"error")") !=
-          std::string::npos);
+TEST_CASE("encode_state() carries the queue fields and omits unset session ids") {
+    const auto idle = encode_state("get_state", SessionStatus{});
+    CHECK(idle.find(R"("queued":0)") != std::string::npos);
+    CHECK(idle.find(R"("processing":false)") != std::string::npos);
+    CHECK(idle.find("last_completed") == std::string::npos);
+    CHECK(idle.find("last_failed") == std::string::npos);
+
+    const auto busy = encode_state("get_state", SessionStatus{
+                                                    .state = ServiceState::Recording,
+                                                    .queued = 2,
+                                                    .processing = true,
+                                                    .last_completed = SessionId{4},
+                                                    .last_failed = SessionId{5},
+                                                });
+    CHECK(busy.find(R"("queued":2)") != std::string::npos);
+    CHECK(busy.find(R"("processing":true)") != std::string::npos);
+    CHECK(busy.find(R"("last_completed":4)") != std::string::npos);
+    CHECK(busy.find(R"("last_failed":5)") != std::string::npos);
+}
+
+TEST_CASE("encode_queued() carries the session id and queue position") {
+    const auto encoded =
+        encode_queued("stop_recording", QueuedJob{.session_id = SessionId{7}, .position = 2});
+
+    CHECK(encoded.find(R"("type":"stop_recording")") != std::string::npos);
+    CHECK(encoded.find(R"("ok":true)") != std::string::npos);
+    CHECK(encoded.find(R"("session_id":7)") != std::string::npos);
+    CHECK(encoded.find(R"("position":2)") != std::string::npos);
+}
+
+TEST_CASE("decode_cancel_job() accepts only a non-negative integer session_id") {
+    CHECK(decode_cancel_job(R"({"type":"cancel_job","session_id":3})") == SessionId{3});
+    CHECK_FALSE(decode_cancel_job(R"({"type":"cancel_job"})").has_value());
+    CHECK_FALSE(decode_cancel_job(R"({"type":"cancel_job","session_id":-1})").has_value());
+    CHECK_FALSE(decode_cancel_job(R"({"type":"cancel_job","session_id":"3"})").has_value());
+    CHECK_FALSE(decode_cancel_job("not json").has_value());
 }
 
 TEST_CASE("encode_config() carries every Configuration field") {
@@ -248,6 +274,15 @@ TEST_CASE("encode_event() for RecordingFinished carries duration and format, not
     CHECK(encoded.find(R"("duration_ms":1000)") != std::string::npos);
     CHECK(encoded.find(R"("sample_rate":4)") != std::string::npos);
     CHECK(encoded.find("samples") == std::string::npos);
+}
+
+TEST_CASE("encode_event() for TranscriptionQueued carries the session id and position") {
+    const auto encoded =
+        encode_event(TranscriptionQueued{.session_id = SessionId{4}, .position = 3});
+
+    CHECK(encoded.find(R"("event":"transcription_queued")") != std::string::npos);
+    CHECK(encoded.find(R"("session_id":4)") != std::string::npos);
+    CHECK(encoded.find(R"("position":3)") != std::string::npos);
 }
 
 TEST_CASE("encode_event() for TranscriptionStarted carries the session id") {

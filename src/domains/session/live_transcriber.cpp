@@ -173,6 +173,13 @@ void LiveTranscriber::tick() {
     if (session_manager_.state() != ServiceState::Recording) {
         return;
     }
+    // The transcription worker owns the speech backend while it has work;
+    // the whisper context is not safe for two callers, so the preview
+    // simply pauses (and resumes by itself once the queue is empty).
+    if (session_manager_.transcription_busy()) {
+        paused_for_worker_ = true;
+        return;
+    }
 
     const auto session_id = session_manager_.active_session_id();
     if (!session_id.has_value()) {
@@ -184,10 +191,33 @@ void LiveTranscriber::tick() {
         return;
     }
 
-    const std::vector<float> window = recording_manager_.samples_snapshot(committed_sample_count_);
+    std::vector<float> window = recording_manager_.samples_snapshot(committed_sample_count_);
     if (window.empty()) {
         return;
     }
+
+    // Right after a pause (the transcription worker held the backend) the
+    // uncommitted window can be far longer than a normal segment, and
+    // decoding it all would block the main loop, IPC included, for seconds.
+    // The preview is best effort and the final Transcript is produced from
+    // the full recording regardless, so skip the oldest audio instead and
+    // restart agreement tracking from there.
+    if (paused_for_worker_) {
+        paused_for_worker_ = false;
+        const auto max_window_samples = static_cast<std::size_t>(
+            config_.max_segment_duration.count()) * audio::kSampleRate / 1000;
+        if (window.size() > max_window_samples) {
+            committed_sample_count_ += window.size() - max_window_samples;
+            committed_word_count_ = 0;
+            previous_words_.clear();
+            carried_words_.clear();
+            window = recording_manager_.samples_snapshot(committed_sample_count_);
+            if (window.empty()) {
+                return;
+            }
+        }
+    }
+
     last_tick_at_ = now;
 
     const speech::TranscriptionResult result = speech_backend_.transcribe_partial(
@@ -267,6 +297,7 @@ void LiveTranscriber::tick() {
 
 void LiveTranscriber::reset() {
     last_tick_at_.reset();
+    paused_for_worker_ = false;
     committed_sample_count_ = 0;
     committed_word_count_ = 0;
     committed_text_.clear();

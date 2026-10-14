@@ -201,7 +201,7 @@ TEST_CASE("cancel_session when idle reports an error") {
     CHECK(response.find(R"("ok":false)") != std::string::npos);
 }
 
-TEST_CASE("start_recording, then stop_recording, returns a Transcript") {
+TEST_CASE("start_recording, then stop_recording, acknowledges the queued job") {
     Fixture fixture;
 
     const auto start_response = fixture.dispatcher.handle_line(R"({"type":"start_recording"})");
@@ -215,8 +215,44 @@ TEST_CASE("start_recording, then stop_recording, returns a Transcript") {
     const auto stop_response = fixture.dispatcher.handle_line(R"({"type":"stop_recording"})");
 
     CHECK(stop_response.find(R"("ok":true)") != std::string::npos);
-    CHECK(stop_response.find("fake transcript") != std::string::npos);
+    CHECK(stop_response.find(R"("session_id":)") != std::string::npos);
+    CHECK(stop_response.find(R"("position":0)") != std::string::npos);
+    // The Transcript is not part of the response: it is published as an
+    // event once the worker finishes.
+    CHECK(stop_response.find("fake transcript") == std::string::npos);
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+    while (fixture.session_manager.poll_completed() == 0 &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds{2});
+    }
     CHECK(fixture.session_manager.state() == yoru::session::ServiceState::Idle);
+    CHECK(fixture.session_manager.status().last_completed.has_value());
+}
+
+TEST_CASE("get_state reports the queue fields") {
+    Fixture fixture;
+
+    const auto response = fixture.dispatcher.handle_line(R"({"type":"get_state"})");
+
+    CHECK(response.find(R"("state":"idle")") != std::string::npos);
+    CHECK(response.find(R"("queued":0)") != std::string::npos);
+    CHECK(response.find(R"("processing":false)") != std::string::npos);
+    CHECK(response.find("last_completed") == std::string::npos);
+}
+
+TEST_CASE("cancel_job rejects a missing or unknown session_id") {
+    Fixture fixture;
+
+    const auto missing = fixture.dispatcher.handle_line(R"({"type":"cancel_job"})");
+    CHECK(missing.find(R"("ok":false)") != std::string::npos);
+
+    const auto negative = fixture.dispatcher.handle_line(R"({"type":"cancel_job","session_id":-1})");
+    CHECK(negative.find(R"("ok":false)") != std::string::npos);
+
+    const auto unknown = fixture.dispatcher.handle_line(R"({"type":"cancel_job","session_id":99})");
+    CHECK(unknown.find(R"("ok":false)") != std::string::npos);
+    CHECK(unknown.find("no queued job") != std::string::npos);
 }
 
 TEST_CASE("start_recording twice reports that a session is already active") {

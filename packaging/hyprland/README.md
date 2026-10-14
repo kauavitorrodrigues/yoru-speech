@@ -4,6 +4,10 @@
 daemon over its IPC socket (the transcript is copied to the clipboard
 automatically by the daemon's `auto_clipboard` setting).
 
+Transcription is queued by the daemon, so you can press the bind again to
+start the next dictation right after stopping one, even while the previous
+one is still being transcribed. Transcripts are delivered in order.
+
 ## Toggle (recommended)
 
 One press starts recording; press the same bind again to stop and
@@ -46,4 +50,7 @@ or `Caps_Lock` — leaving the daemon stuck recording until you run
 `yoru-dictate stop` manually. If that happens, use `toggle` instead.
 
 If `notify-send` is installed, `yoru-dictate` also shows a notification
-with the transcribed text (or the error, if something failed).
+with the transcribed text (or the error, if something failed). Because the
+daemon acknowledges `stop_recording` before the text is ready, each stop
+keeps a short-lived process around, subscribed to events, until its own
+transcript arrives (or 5 minutes pass); the clipboard is unaffected.

@@ -13,18 +13,23 @@
 
 #include <doctest/doctest.h>
 
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <filesystem>
+#include <mutex>
 #include <optional>
 #include <thread>
 #include <variant>
+#include <vector>
 
 using yoru::audio::RecordingManager;
 using yoru::config::Configuration;
 using yoru::core::ErrorOccurred;
 using yoru::core::EventBus;
 using yoru::core::SessionId;
+using yoru::session::QueuedJob;
 using yoru::session::ServiceState;
 using yoru::session::SessionCancelled;
 using yoru::session::SessionError;
@@ -57,9 +62,17 @@ public:
         return true;
     }
 
-    TranscriptionResult transcribe(SessionId /*session_id*/, const std::vector<float>& samples,
+    TranscriptionResult transcribe(SessionId session_id, const std::vector<float>& samples,
                                    const TranscriptionRequest& request) override {
-        last_request = request;
+        {
+            std::unique_lock lock(gate_mutex);
+            last_request = request;
+            transcribe_calls.push_back(session_id);
+            gate_cv.wait(lock, [this] { return !gated || aborted; });
+            if (aborted) {
+                return SpeechError{"transcription aborted"};
+            }
+        }
         if (should_fail) {
             return SpeechError{"fake transcription failure"};
         }
@@ -78,9 +91,69 @@ public:
         return transcribe(SessionId{0}, window, request);
     }
 
+    void request_abort() override {
+        std::lock_guard lock(gate_mutex);
+        aborted = true;
+        gate_cv.notify_all();
+    }
+
+    void clear_abort() override {
+        std::lock_guard lock(gate_mutex);
+        aborted = false;
+    }
+
+    // While gated, transcribe() blocks until open_gate() (or an abort).
+    void close_gate() {
+        std::lock_guard lock(gate_mutex);
+        gated = true;
+    }
+    void open_gate() {
+        std::lock_guard lock(gate_mutex);
+        gated = false;
+        gate_cv.notify_all();
+    }
+
+    std::optional<TranscriptionRequest> request_seen() {
+        std::lock_guard lock(gate_mutex);
+        return last_request;
+    }
+
+    std::vector<SessionId> calls() {
+        std::lock_guard lock(gate_mutex);
+        return transcribe_calls;
+    }
+
     bool should_fail = false;
+
+private:
+    std::mutex gate_mutex;
+    std::condition_variable gate_cv;
+    bool gated = false;
+    bool aborted = false;
     std::optional<TranscriptionRequest> last_request;
+    std::vector<SessionId> transcribe_calls;
 };
+
+// Waits until the worker has entered transcribe() at least `count` times.
+bool wait_for_calls(FakeSpeechBackend& backend, std::size_t count) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+    while (backend.calls().size() < count && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds{2});
+    }
+    return backend.calls().size() >= count;
+}
+
+// Pumps poll_completed() until `count` results were published or time
+// runs out, the way the main loop does.
+bool pump_until(SessionManager& manager, std::size_t count) {
+    std::size_t total = 0;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{10};
+    while (total < count && std::chrono::steady_clock::now() < deadline) {
+        total += manager.poll_completed();
+        std::this_thread::sleep_for(std::chrono::milliseconds{2});
+    }
+    return total >= count;
+}
 
 // Every test here that records needs a real capture device. Skip
 // gracefully, as established for RecordingManager's own tests, rather
@@ -162,11 +235,31 @@ TEST_CASE("cancel_session() during recording releases the device and returns to 
     manager.cancel_session();
 }
 
-TEST_CASE("start then stop runs the full cycle and returns the Transcript") {
+TEST_CASE("start then stop queues the job and poll_completed() publishes the Transcript") {
     EventBus bus;
     RecordingManager recording_manager(bus);
     FakeSpeechBackend speech_backend;
     SessionManager manager(bus, recording_manager, speech_backend, Configuration{});
+
+    std::vector<std::string> order;
+    std::optional<yoru::session::TranscriptionQueued> queued;
+    std::optional<SessionId> started_id;
+    std::optional<yoru::speech::TranscriptionCompleted> completed;
+    bus.subscribe<yoru::session::TranscriptionQueued>(
+        [&](const yoru::session::TranscriptionQueued& event) {
+            queued = event;
+            order.push_back("queued");
+        });
+    bus.subscribe<yoru::speech::TranscriptionStarted>(
+        [&](const yoru::speech::TranscriptionStarted& event) {
+            started_id = event.session_id;
+            order.push_back("started");
+        });
+    bus.subscribe<yoru::speech::TranscriptionCompleted>(
+        [&](const yoru::speech::TranscriptionCompleted& event) {
+            completed = event;
+            order.push_back("completed");
+        });
 
     if (skip_if_no_device(manager.start_session())) {
         return;
@@ -176,9 +269,184 @@ TEST_CASE("start then stop runs the full cycle and returns the Transcript") {
 
     const auto result = manager.stop_session();
 
+    REQUIRE(std::holds_alternative<QueuedJob>(result));
+    const auto job = std::get<QueuedJob>(result);
+    CHECK(job.position == 0);
+    // stop_session() only reports "queued"; "started" comes from the worker.
+    REQUIRE(queued.has_value());
+    CHECK(queued->session_id == job.session_id);
+    CHECK(queued->position == 0);
+    CHECK_FALSE(started_id.has_value());
+
+    REQUIRE(pump_until(manager, 1));
+    REQUIRE(started_id.has_value());
+    CHECK(*started_id == job.session_id);
+    REQUIRE(order.size() == 3);
+    CHECK(order[0] == "queued");
+    CHECK(order[1] == "started");
+    CHECK(order[2] == "completed");
     CHECK(manager.state() == ServiceState::Idle);
-    REQUIRE(std::holds_alternative<Transcript>(result));
-    CHECK(std::get<Transcript>(result).text == "fake transcript");
+    REQUIRE(completed.has_value());
+    CHECK(completed->session_id == job.session_id);
+    CHECK(completed->transcript.text == "fake transcript");
+    CHECK(manager.status().last_completed == job.session_id);
+}
+
+TEST_CASE("a second session can record while the first is still being transcribed") {
+    EventBus bus;
+    RecordingManager recording_manager(bus);
+    FakeSpeechBackend speech_backend;
+    speech_backend.close_gate();
+    SessionManager manager(bus, recording_manager, speech_backend, Configuration{});
+
+    std::vector<SessionId> completed_ids;
+    bus.subscribe<yoru::speech::TranscriptionCompleted>(
+        [&](const yoru::speech::TranscriptionCompleted& event) {
+            completed_ids.push_back(event.session_id);
+        });
+
+    if (skip_if_no_device(manager.start_session())) {
+        return;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds{200});
+    const auto first = manager.stop_session();
+    REQUIRE(std::holds_alternative<QueuedJob>(first));
+
+    // A is stuck in transcribe(); B must still be able to start and stop.
+    CHECK(manager.state() == ServiceState::Processing);
+    REQUIRE_FALSE(manager.start_session().has_value());
+    CHECK(manager.state() == ServiceState::Recording);
+    CHECK(manager.transcription_busy());
+    std::this_thread::sleep_for(std::chrono::milliseconds{200});
+    const auto second = manager.stop_session();
+    REQUIRE(std::holds_alternative<QueuedJob>(second));
+    CHECK(std::get<QueuedJob>(second).position >= 1);
+
+    speech_backend.open_gate();
+    REQUIRE(pump_until(manager, 2));
+
+    // FIFO: results come out in the order the recordings were stopped.
+    REQUIRE(completed_ids.size() == 2);
+    CHECK(completed_ids[0] == std::get<QueuedJob>(first).session_id);
+    CHECK(completed_ids[1] == std::get<QueuedJob>(second).session_id);
+}
+
+TEST_CASE("start_session() is rejected, and reported, while the transcription queue is full") {
+    EventBus bus;
+    RecordingManager recording_manager(bus);
+    FakeSpeechBackend speech_backend;
+    speech_backend.close_gate();
+    SessionManager manager(bus, recording_manager, speech_backend, Configuration{}, 1);
+
+    std::optional<ErrorOccurred> error_event;
+    bus.subscribe<ErrorOccurred>([&](const ErrorOccurred& event) { error_event = event; });
+
+    // Capacity 1 and a stuck worker: job A is taken by the worker, B fills
+    // the single slot, so a third recording cannot be accepted.
+    for (int i = 0; i < 2; ++i) {
+        if (skip_if_no_device(manager.start_session())) {
+            speech_backend.open_gate();
+            return;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds{200});
+        REQUIRE(std::holds_alternative<QueuedJob>(manager.stop_session()));
+        if (i == 0) {
+            // Wait until the worker has actually taken job A off the queue.
+            REQUIRE(wait_for_calls(speech_backend, 1));
+        }
+    }
+
+    const auto rejected = manager.start_session();
+    REQUIRE(rejected.has_value());
+    CHECK(rejected->message == "transcription queue is full");
+    CHECK(manager.state() == ServiceState::Processing);
+    REQUIRE(error_event.has_value());
+    CHECK(error_event->component == "queue");
+
+    speech_backend.open_gate();
+    REQUIRE(pump_until(manager, 2));
+    CHECK_FALSE(manager.start_session().has_value());
+    manager.cancel_session();
+}
+
+TEST_CASE("cancel_job() removes a queued job but not the one in progress") {
+    EventBus bus;
+    RecordingManager recording_manager(bus);
+    FakeSpeechBackend speech_backend;
+    speech_backend.close_gate();
+    SessionManager manager(bus, recording_manager, speech_backend, Configuration{});
+
+    std::vector<SessionId> cancelled;
+    bus.subscribe<SessionCancelled>(
+        [&](const SessionCancelled& event) { cancelled.push_back(event.session_id); });
+
+    std::vector<SessionId> ids;
+    for (int i = 0; i < 2; ++i) {
+        if (skip_if_no_device(manager.start_session())) {
+            speech_backend.open_gate();
+            return;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds{200});
+        const auto result = manager.stop_session();
+        REQUIRE(std::holds_alternative<QueuedJob>(result));
+        ids.push_back(std::get<QueuedJob>(result).session_id);
+        if (i == 0) {
+            REQUIRE(wait_for_calls(speech_backend, 1));
+        }
+    }
+
+    CHECK_FALSE(manager.cancel_job(ids[0])); // running: cannot be interrupted
+    CHECK(manager.cancel_job(ids[1]));       // still queued
+    REQUIRE(cancelled.size() == 1);
+    CHECK(cancelled[0] == ids[1]);
+
+    speech_backend.open_gate();
+    REQUIRE(pump_until(manager, 1));
+    CHECK(speech_backend.calls().size() == 1);
+}
+
+TEST_CASE("shutdown() aborts the job in progress and reports every dropped job") {
+    EventBus bus;
+    RecordingManager recording_manager(bus);
+    FakeSpeechBackend speech_backend;
+    speech_backend.close_gate();
+    SessionManager manager(bus, recording_manager, speech_backend, Configuration{});
+
+    std::vector<ErrorOccurred> errors;
+    bus.subscribe<ErrorOccurred>([&](const ErrorOccurred& event) { errors.push_back(event); });
+
+    std::vector<SessionId> ids;
+    for (int i = 0; i < 2; ++i) {
+        if (skip_if_no_device(manager.start_session())) {
+            speech_backend.open_gate();
+            return;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds{200});
+        const auto result = manager.stop_session();
+        REQUIRE(std::holds_alternative<QueuedJob>(result));
+        ids.push_back(std::get<QueuedJob>(result).session_id);
+        if (i == 0) {
+            REQUIRE(wait_for_calls(speech_backend, 1));
+        }
+    }
+
+    const auto dropped = manager.shutdown();
+
+    // Job 2 never ran: it is named in the return value and reported.
+    REQUIRE(dropped.size() == 1);
+    CHECK(dropped[0] == ids[1]);
+    REQUIRE(errors.size() == 1);
+    CHECK(errors[0].component == "queue");
+    CHECK(errors[0].session_id == ids[1]);
+    CHECK_FALSE(manager.transcription_busy());
+    CHECK(manager.state() == ServiceState::Idle);
+
+    // Job 1 was aborted mid-flight; its failure is published on the next
+    // poll, which is what main() relies on after shutdown().
+    CHECK(manager.poll_completed() == 1);
+    REQUIRE(errors.size() == 2);
+    CHECK(errors[1].component == "speech");
+    CHECK(errors[1].session_id == ids[0]);
 }
 
 TEST_CASE("stop_session() passes the configured language and prompt to the Speech Backend") {
@@ -196,11 +464,12 @@ TEST_CASE("stop_session() passes the configured language and prompt to the Speec
     std::this_thread::sleep_for(std::chrono::milliseconds{200});
 
     manager.stop_session();
+    REQUIRE(pump_until(manager, 1));
 
-    REQUIRE(speech_backend.last_request.has_value());
-    CHECK(speech_backend.last_request->language == "pt");
-    CHECK(speech_backend.last_request->initial_prompt ==
-         "mixing English terms into Portuguese speech");
+    const auto request = speech_backend.request_seen();
+    REQUIRE(request.has_value());
+    CHECK(request->language == "pt");
+    CHECK(request->initial_prompt == "mixing English terms into Portuguese speech");
 }
 
 TEST_CASE("a ConfigurationChanged after construction updates the language used on stop_session()") {
@@ -219,12 +488,14 @@ TEST_CASE("a ConfigurationChanged after construction updates the language used o
     std::this_thread::sleep_for(std::chrono::milliseconds{200});
 
     manager.stop_session();
+    REQUIRE(pump_until(manager, 1));
 
-    REQUIRE(speech_backend.last_request.has_value());
-    CHECK(speech_backend.last_request->language == "es");
+    const auto request = speech_backend.request_seen();
+    REQUIRE(request.has_value());
+    CHECK(request->language == "es");
 }
 
-TEST_CASE("a transcription failure transitions to Error, and cancel_session() recovers") {
+TEST_CASE("a transcription failure is reported for that job and leaves the service Idle") {
     EventBus bus;
     RecordingManager recording_manager(bus);
     FakeSpeechBackend speech_backend;
@@ -237,18 +508,19 @@ TEST_CASE("a transcription failure transitions to Error, and cancel_session() re
     if (skip_if_no_device(manager.start_session())) {
         return;
     }
+    std::this_thread::sleep_for(std::chrono::milliseconds{200});
 
     const auto stop_result = manager.stop_session();
+    REQUIRE(std::holds_alternative<QueuedJob>(stop_result));
+    REQUIRE(pump_until(manager, 1));
 
-    REQUIRE(std::holds_alternative<SessionError>(stop_result));
-    CHECK(manager.state() == ServiceState::Error);
+    // Unlike a capture failure, this concerns one job: no Error state to
+    // recover from, and the next session can start right away.
+    CHECK(manager.state() == ServiceState::Idle);
     REQUIRE(error_event.has_value());
     CHECK(error_event->component == "speech");
-
-    // Recovery: cancel_session() acknowledges the error and returns to
-    // Idle, able to accept a new session.
-    REQUIRE_FALSE(manager.cancel_session().has_value());
-    CHECK(manager.state() == ServiceState::Idle);
+    CHECK(error_event->session_id == std::get<QueuedJob>(stop_result).session_id);
+    CHECK(manager.status().last_failed == std::get<QueuedJob>(stop_result).session_id);
 
     speech_backend.should_fail = false;
     CHECK_FALSE(skip_if_no_device(manager.start_session()));
@@ -284,9 +556,15 @@ TEST_CASE("end-to-end with a real whisper.cpp model produces a Transcript from r
 
     std::this_thread::sleep_for(std::chrono::milliseconds{500});
 
+    std::optional<Transcript> transcript;
+    bus.subscribe<yoru::speech::TranscriptionCompleted>(
+        [&](const yoru::speech::TranscriptionCompleted& event) { transcript = event.transcript; });
+
     const auto result = manager.stop_session();
 
+    REQUIRE(std::holds_alternative<QueuedJob>(result));
+    REQUIRE(pump_until(manager, 1));
     CHECK(manager.state() == ServiceState::Idle);
-    REQUIRE(std::holds_alternative<Transcript>(result));
-    CHECK(std::get<Transcript>(result).audio_duration > std::chrono::milliseconds{0});
+    REQUIRE(transcript.has_value());
+    CHECK(transcript->audio_duration > std::chrono::milliseconds{0});
 }

@@ -83,6 +83,15 @@ ParsedMessage parse_message(const std::string& line) {
     return ParsedMessage{.type = parsed.at("type").get<std::string>(), .error = std::nullopt};
 }
 
+std::optional<core::SessionId> decode_cancel_job(const std::string& line) {
+    const json parsed = json::parse(line, nullptr, false);
+    if (parsed.is_discarded() || !parsed.is_object() || !parsed.contains("session_id") ||
+        !parsed.at("session_id").is_number_unsigned()) {
+        return std::nullopt;
+    }
+    return core::SessionId{parsed.at("session_id").get<std::uint64_t>()};
+}
+
 DecodedSetConfig decode_set_config(const std::string& line, const config::Configuration& base) {
     const json parsed = json::parse(line, nullptr, false);
     if (parsed.is_discarded() || !parsed.is_object()) {
@@ -150,21 +159,31 @@ std::string encode_error(const std::string& type, const std::string& error) {
     return json{{"type", type}, {"ok", false}, {"error", error}}.dump();
 }
 
-std::string encode_transcript(const std::string& type, const speech::Transcript& transcript) {
+std::string encode_queued(const std::string& type, const session::QueuedJob& job) {
     return json{
         {"type", type},
         {"ok", true},
-        {"text", transcript.text},
-        {"detected_language", transcript.detected_language},
-        {"requested_language", transcript.requested_language},
-        {"audio_duration_ms", transcript.audio_duration.count()},
-        {"processing_time_ms", transcript.processing_time.count()},
+        {"session_id", raw(job.session_id)},
+        {"position", job.position},
     }
         .dump();
 }
 
-std::string encode_state(const std::string& type, session::ServiceState state) {
-    return json{{"type", type}, {"ok", true}, {"state", to_string(state)}}.dump();
+std::string encode_state(const std::string& type, const session::SessionStatus& status) {
+    json response{
+        {"type", type},
+        {"ok", true},
+        {"state", to_string(status.state)},
+        {"queued", status.queued},
+        {"processing", status.processing},
+    };
+    if (status.last_completed.has_value()) {
+        response["last_completed"] = raw(status.last_completed.value());
+    }
+    if (status.last_failed.has_value()) {
+        response["last_failed"] = raw(status.last_failed.value());
+    }
+    return response.dump();
 }
 
 std::string encode_config(const std::string& type, const config::Configuration& configuration) {
@@ -223,6 +242,13 @@ std::string encode_event(const speech::TranscriptionCompleted& event) {
     envelope["requested_language"] = event.transcript.requested_language;
     envelope["audio_duration_ms"] = event.transcript.audio_duration.count();
     envelope["processing_time_ms"] = event.transcript.processing_time.count();
+    return envelope.dump();
+}
+
+std::string encode_event(const session::TranscriptionQueued& event) {
+    auto envelope = event_envelope("transcription_queued");
+    envelope["session_id"] = raw(event.session_id);
+    envelope["position"] = event.position;
     return envelope.dump();
 }
 

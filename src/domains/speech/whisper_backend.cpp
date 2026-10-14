@@ -1,10 +1,11 @@
 #include "domains/speech/whisper_backend.hpp"
 
-#include "core/error_event.hpp"
 #include "domains/speech/events.hpp"
 
+#include <ggml-backend.h>
 #include <whisper.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -15,11 +16,20 @@ namespace yoru::speech {
 
 struct WhisperBackend::Impl {
     whisper_context* ctx = nullptr;
+    // Set from any thread by request_abort(); polled by whisper_full via
+    // abort_callback so a long transcription can be cut short at shutdown.
+    std::atomic<bool> abort_requested{false};
     std::optional<Model> current_model;
 };
 
 WhisperBackend::WhisperBackend(core::EventBus& event_bus)
-    : event_bus_(event_bus), impl_(std::make_unique<Impl>()) {}
+    : event_bus_(event_bus), impl_(std::make_unique<Impl>()) {
+    // ggml ships its CPU/GPU backends as separate plugins (e.g.
+    // /usr/lib/ggml/*.so) that whisper.cpp no longer loads on its own;
+    // without this, ggml_backend_dev_count() is 0 and model loading
+    // aborts with GGML_ASSERT(device) failed.
+    ggml_backend_load_all();
+}
 
 WhisperBackend::~WhisperBackend() {
     unload_model();
@@ -62,6 +72,14 @@ void WhisperBackend::unload_model() {
     impl_->current_model.reset();
 }
 
+void WhisperBackend::request_abort() {
+    impl_->abort_requested.store(true);
+}
+
+void WhisperBackend::clear_abort() {
+    impl_->abort_requested.store(false);
+}
+
 bool WhisperBackend::has_model_loaded() const {
     return impl_->ctx != nullptr;
 }
@@ -102,12 +120,20 @@ TranscriptionResult WhisperBackend::run_whisper_full(const std::vector<float>& s
     params.initial_prompt = has_prompt ? request.initial_prompt.c_str() : nullptr;
     params.carry_initial_prompt = has_prompt;
 
+    params.abort_callback = [](void* user_data) {
+        return static_cast<std::atomic<bool>*>(user_data)->load();
+    };
+    params.abort_callback_user_data = &impl_->abort_requested;
+
     const auto started_at = std::chrono::steady_clock::now();
     const int status =
         whisper_full(impl_->ctx, params, samples.data(), static_cast<int>(samples.size()));
     const auto processing_time = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - started_at);
 
+    if (impl_->abort_requested.load()) {
+        return SpeechError{"transcription aborted"};
+    }
     if (status != 0) {
         return SpeechError{"whisper_full failed internally"};
     }
@@ -135,38 +161,14 @@ TranscriptionResult WhisperBackend::run_whisper_full(const std::vector<float>& s
     };
 }
 
-TranscriptionResult WhisperBackend::transcribe(core::SessionId session_id,
+TranscriptionResult WhisperBackend::transcribe(core::SessionId /*session_id*/,
                                                const std::vector<float>& samples,
                                                const TranscriptionRequest& request) {
-    // Rejected before TranscriptionStarted is published: nothing was
-    // actually attempted, so there is nothing to report as "started".
-    // run_whisper_full() re-checks both conditions below; duplicated here
-    // only to gate the TranscriptionStarted publish — do not remove this
-    // pair to "simplify", or an empty/model-less call starts reporting a
-    // spurious TranscriptionStarted.
-    if (samples.empty()) {
-        return SpeechError{"empty audio buffer"};
-    }
-    if (impl_->ctx == nullptr) {
-        return SpeechError{"no model loaded"};
-    }
-
-    event_bus_.publish(TranscriptionStarted{session_id});
-
-    const TranscriptionResult result = run_whisper_full(samples, request);
-
-    if (const auto* error = std::get_if<SpeechError>(&result)) {
-        event_bus_.publish(core::ErrorOccurred{
-            .session_id = session_id,
-            .component = "speech",
-            .message = error->message,
-        });
-        return *error;
-    }
-
-    const auto& transcript = std::get<Transcript>(result);
-    event_bus_.publish(TranscriptionCompleted{session_id, transcript});
-    return transcript;
+    // Publishes nothing: transcribe() runs on the transcription worker
+    // thread, and EventBus is not thread-safe. The caller reports
+    // TranscriptionStarted/Completed/ErrorOccurred from its own thread.
+    // Does not touch the abort flag: see SpeechBackend::clear_abort().
+    return run_whisper_full(samples, request);
 }
 
 TranscriptionResult WhisperBackend::transcribe_partial(const std::vector<float>& window,

@@ -4,6 +4,7 @@ add_executable(
     test_session.cpp
     test_session_manager.cpp
     test_live_transcriber.cpp
+    test_transcription_queue.cpp
 )
 
 target_link_libraries(

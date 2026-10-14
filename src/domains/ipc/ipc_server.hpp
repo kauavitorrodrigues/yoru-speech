@@ -26,7 +26,7 @@ struct IpcError {
 // commands. This is the transport only.
 //
 // Single-threaded: every method must be called from one controlling
-// thread. Internally multiplexes the listening socket and every
+// thread, except wake(). Internally multiplexes the listening socket and every
 // connected client's socket with poll(), so no client can block another
 // (every socket, including accepted client sockets, is non-blocking).
 //
@@ -89,6 +89,14 @@ public:
     // for disconnection: `on_disconnect` fires for it from the next
     // poll_once() call, never synchronously from here.
     void send_line(ClientId client_id, const std::string& line);
+
+    // Makes a poll_once() that is waiting (or the next one) return
+    // immediately instead of sleeping out its timeout, so work finished on
+    // another thread, e.g. a transcription, is noticed without polling.
+    // The one method safe to call from any thread, and cheap (a single
+    // eventfd write). A no-op if the server isn't running; must not be
+    // called concurrently with start()/stop().
+    void wake();
 
     bool is_running() const;
 

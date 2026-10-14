@@ -48,4 +48,8 @@ void IpcService::poll_once(int timeout_ms) {
         [this](IpcServer::ClientId client_id) { event_bridge_.unsubscribe(client_id); });
 }
 
+void IpcService::wake() {
+    server_.wake();
+}
+
 } // namespace yoru::ipc

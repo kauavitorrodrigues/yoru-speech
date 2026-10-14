@@ -5,8 +5,10 @@
 # Also depends on config, to seed and track the language/prompt passed to
 # the Speech Backend (config has no dependencies of its own, so this
 # cannot cycle either).
+find_package(Threads REQUIRED)
+
 add_library(yoru-domain-session service_state.cpp session.cpp session_manager.cpp
-                                live_transcriber.cpp)
+                                live_transcriber.cpp transcription_queue.cpp)
 
 target_include_directories(yoru-domain-session PUBLIC ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(
@@ -16,6 +18,7 @@ target_link_libraries(
         yoru-domain-audio
         yoru-domain-speech
         yoru-domain-config
+        Threads::Threads
     PRIVATE
         yoru-warnings
 )

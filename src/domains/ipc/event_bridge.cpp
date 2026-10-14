@@ -25,6 +25,8 @@ EventBridge::EventBridge(core::EventBus& event_bus, IpcServer& server)
         [this](const audio::RecordingStarted& event) { broadcast(event); });
     event_bus_.subscribe<audio::RecordingFinished>(
         [this](const audio::RecordingFinished& event) { broadcast(event); });
+    event_bus_.subscribe<session::TranscriptionQueued>(
+        [this](const session::TranscriptionQueued& event) { broadcast(event); });
     event_bus_.subscribe<speech::TranscriptionStarted>(
         [this](const speech::TranscriptionStarted& event) { broadcast(event); });
     event_bus_.subscribe<speech::TranscriptionCompleted>(

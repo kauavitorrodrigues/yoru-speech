@@ -51,6 +51,11 @@ void log_domain_events(yoru::core::EventBus& event_bus, const yoru::core::Logger
             logger.info("recording finished (session " + session_id_str(event.session_id) + ", " +
                         std::to_string(event.recording.duration().count()) + "ms)");
         });
+    event_bus.subscribe<yoru::session::TranscriptionQueued>(
+        [&logger](const yoru::session::TranscriptionQueued& event) {
+            logger.info("transcription queued (session " + session_id_str(event.session_id) +
+                        ", position " + std::to_string(event.position) + ")");
+        });
     event_bus.subscribe<yoru::speech::TranscriptionStarted>(
         [&logger](const yoru::speech::TranscriptionStarted& event) {
             logger.info("transcription started (session " + session_id_str(event.session_id) + ")");
@@ -127,7 +132,11 @@ int main() {
     // publishers (WhisperBackend, AutoClipboard) actually observable.
     event_bus.subscribe<yoru::core::ErrorOccurred>(
         [&logger](const yoru::core::ErrorOccurred& error) {
-            logger.warn(error.component + ": " + error.message);
+            const std::string session =
+                error.session_id.has_value()
+                    ? " (session " + session_id_str(error.session_id.value()) + ")"
+                    : "";
+            logger.warn(error.component + ": " + error.message + session);
         });
     log_domain_events(event_bus, logger);
 
@@ -165,15 +174,34 @@ int main() {
     // ordinary error value once the signal itself can't terminate us.
     std::signal(SIGPIPE, SIG_IGN);
 
+    // The worker thread rings this whenever a transcription starts or
+    // finishes, which cuts the poll below short so the result reaches
+    // clients and the clipboard right away instead of at the next timeout.
+    session_manager.set_activity_callback([&ipc_service] { ipc_service.wake(); });
+
     while (g_should_stop == 0) {
         ipc_service.poll_once(200);
+        session_manager.poll_completed();
         live_transcriber.tick();
     }
 
     logger.info("shutting down");
-    if (session_manager.state() != yoru::session::ServiceState::Idle) {
-        session_manager.cancel_session();
+    // cancel_session() only concerns a recording in progress (or a
+    // failure to acknowledge); queued transcriptions are handled by
+    // shutdown(), which must also run before the speech backend is
+    // destroyed since the worker thread calls into it.
+    session_manager.cancel_session();
+    // Each dropped job is also reported individually (with its session id)
+    // as an ErrorOccurred, which the subscribers above log and forward to
+    // IPC clients.
+    const auto dropped = session_manager.shutdown();
+    // The worker is joined, so nothing can call into ipc_service anymore.
+    session_manager.set_activity_callback({});
+    if (!dropped.empty()) {
+        logger.warn("dropped " + std::to_string(dropped.size()) +
+                    " queued transcription(s) at shutdown");
     }
+    session_manager.poll_completed();
     ipc_service.stop();
 
     return 0;
